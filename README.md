@@ -171,3 +171,5 @@ npm run lint:json   # Lint with JSON output
 ## License
 
 MIT
+
+<!-- Workflow configuration verified: 2026-02-20 -->
