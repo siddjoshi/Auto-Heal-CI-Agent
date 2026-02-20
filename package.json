@@ -6,9 +6,9 @@
   "scripts": {
     "start": "node src/server.js",
     "test": "jest --verbose",
-    "test:json": "jest --json --outputFile=test-results.json --verbose 2>&1 | tee test-output.txt; exit ${PIPESTATUS[0]:-$?}",
+    "test:json": "jest --json --outputFile=test-results.json --verbose",
     "lint": "eslint src/ tests/",
-    "lint:json": "eslint src/ tests/ --format json --output-file lint-output.json; exit ${PIPESTATUS[0]:-$?}",
+    "lint:json": "eslint src/ tests/ --format json --output-file lint-output.json",
     "build": "node -e \"require('./src/app'); console.log('Build check passed');\""
   },
   "keywords": ["ci", "self-healing", "copilot", "automation"],

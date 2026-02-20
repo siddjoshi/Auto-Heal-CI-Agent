@@ -52,24 +52,30 @@ jobs:
 
       - name: Install dependencies
         id: install
-        run: npm ci 2>&1 | tee ci-output.log
+        run: |
+          set -o pipefail
+          npm ci 2>&1 | tee ci-output.log
 
       - name: Run linter
         id: lint
         continue-on-error: true
         run: |
+          set -o pipefail
           npm run lint:json 2>&1 | tee -a ci-output.log
           npm run lint 2>&1 | tee -a ci-output.log
 
       - name: Run build check
         id: build
         continue-on-error: true
-        run: npm run build 2>&1 | tee -a ci-output.log
+        run: |
+          set -o pipefail
+          npm run build 2>&1 | tee -a ci-output.log
 
       - name: Run tests
         id: test
         continue-on-error: true
         run: |
+          set -o pipefail
           npm run test:json 2>&1 | tee -a ci-output.log
           npm test 2>&1 | tee -a ci-output.log
 
