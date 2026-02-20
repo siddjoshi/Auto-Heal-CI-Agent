@@ -181,7 +181,8 @@ jobs:
           mkdir -p .heal-audit
           cp /tmp/diagnosis.json .heal-audit/diagnosis.json
 
-      - name: Create issue and assign Copilot
+      - name: Create issue
+        id: create-issue
         uses: actions/github-script@v7
         with:
           script: |
@@ -271,29 +272,21 @@ jobs:
             });
 
             core.info(`Created issue #${issue.data.number}`);
+            core.setOutput('issue_number', issue.data.number);
 
-            // Assign Copilot coding agent to the issue
-            try {
-              await github.request('POST /repos/{owner}/{repo}/issues/{issue_number}/copilot', {
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: issue.data.number
-              });
-              core.info(`Assigned Copilot coding agent to issue #${issue.data.number}`);
-            } catch (copilotError) {
-              core.warning(`Copilot endpoint failed: ${copilotError.message}. Trying addAssignees...`);
-              try {
-                await github.rest.issues.addAssignees({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  issue_number: issue.data.number,
-                  assignees: ['copilot']
-                });
-                core.info(`Assigned copilot via addAssignees to issue #${issue.data.number}`);
-              } catch (assignError) {
-                core.setFailed(`Could not assign Copilot to issue #${issue.data.number}: ${assignError.message}`);
-              }
-            }
+      - name: Assign Copilot to issue
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          ISSUE=${{ steps.create-issue.outputs.issue_number }}
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::warning::GH_PAT secret not set — cannot assign Copilot. Set a PAT with repo scope as GH_PAT secret."
+            exit 0
+          fi
+          echo "Assigning Copilot coding agent to issue #$ISSUE..."
+          gh api repos/${{ github.repository }}/issues/$ISSUE/copilot --method POST || \
+            gh api repos/${{ github.repository }}/issues/$ISSUE/assignees --method POST -f "assignees[]=copilot" || \
+            echo "::warning::Could not assign Copilot to issue #$ISSUE"
 
       - name: Upload heal audit
         if: always()
