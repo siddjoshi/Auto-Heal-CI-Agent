@@ -2,8 +2,8 @@
 # Self-Healing CI/CD Pipeline
 # ============================================================================
 # This workflow runs tests and lint on every push/PR. If CI fails, it
-# automatically invokes GitHub Copilot CLI to diagnose and fix the issue,
-# then commits the fix and re-triggers the pipeline.
+# automatically diagnoses the issue, creates a GitHub issue with full context,
+# and assigns GitHub Copilot coding agent to fix it via a pull request.
 #
 # Kill switch: Set repository variable ENABLE_SELF_HEAL=false to disable.
 # ============================================================================
@@ -132,58 +132,162 @@ jobs:
           name: ci-failure-artifacts
         continue-on-error: true
 
-      - name: Install Copilot CLI
-        run: npm install -g @github/copilot
-        env:
-          GH_TOKEN: ${{ secrets.COPILOT_TOKEN }}
-
-      - name: Reproduce failures for handler input
+      - name: Reproduce failures and diagnose
+        id: diagnose
         run: |
           # Re-run failing steps to generate fresh output files
           npm run lint:json 2>&1 || true
           npm run test:json 2>&1 || true
           npm run build 2>&1 | tee ci-output.log || true
 
-      - name: Run self-healing orchestrator
-        env:
-          GH_TOKEN: ${{ secrets.COPILOT_TOKEN }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          GITHUB_SHA: ${{ github.sha }}
-          GITHUB_REF_NAME: ${{ github.ref_name }}
-          ENABLE_SELF_HEAL: ${{ vars.ENABLE_SELF_HEAL }}
-        run: |
-          chmod +x scripts/heal.sh scripts/handlers/*.sh scripts/safety-guard.sh scripts/validate-changes.sh
-          bash scripts/heal.sh \
-            --log-file ci-output.log \
-            --max-attempts 3 \
-            --mode direct
+          # Run failure handlers to classify the issue
+          chmod +x scripts/handlers/*.sh
+          DIAGNOSIS=""
+          FAILURE_TYPE="unknown"
 
-      - name: Validate changed files
-        run: |
-          bash scripts/validate-changes.sh
+          for handler in scripts/handlers/*-handler.sh; do
+            if [ ! -f "$handler" ]; then continue; fi
+            handler_name=$(basename "$handler" .sh)
+            echo "Trying handler: $handler_name"
 
-      - name: Commit and push fix
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+            if handler_output=$(bash "$handler" ci-output.log 2>/dev/null); then
+              echo "Handler matched: $handler_name"
+              DIAGNOSIS="$handler_output"
+              FAILURE_TYPE=$(echo "$handler_output" | node -e "
+                let d=''; process.stdin.on('data',c=>d+=c);
+                process.stdin.on('end',()=>{ try{console.log(JSON.parse(d).type)}catch(e){console.log('unknown')} });
+              ")
+              break
+            fi
+          done
 
-          # Check if there are changes to commit
-          if git diff --quiet && git diff --cached --quiet; then
-            echo "No changes detected. Copilot may not have made any edits."
-            exit 1
+          if [ -z "$DIAGNOSIS" ]; then
+            DIAGNOSIS='{"type":"unknown","healable":true,"failures":[],"relevantFiles":[]}'
           fi
 
-          # Stage only source and test files (safety: not workflows or scripts)
-          git add src/ tests/
+          echo "failure_type=$FAILURE_TYPE" >> "$GITHUB_OUTPUT"
 
-          # Create descriptive commit message
-          ATTEMPT="${{ github.run_attempt }}"
-          git commit -m "fix: auto-heal CI failure (attempt ${ATTEMPT})
+          # Save diagnosis and log tail to files for the next step
+          echo "$DIAGNOSIS" > /tmp/diagnosis.json
+          tail -100 ci-output.log > /tmp/ci-log-tail.txt 2>/dev/null || true
 
-          Applied by self-healing CI pipeline using GitHub Copilot CLI.
-          Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          # Save to audit directory
+          mkdir -p .heal-audit
+          cp /tmp/diagnosis.json .heal-audit/diagnosis.json
 
-          git push
+      - name: Create issue and assign Copilot
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+
+            let diagnosis = '';
+            try {
+              diagnosis = fs.readFileSync('/tmp/diagnosis.json', 'utf8');
+            } catch (e) {
+              diagnosis = '{"type":"unknown","failures":[]}';
+            }
+
+            let logTail = '';
+            try {
+              logTail = fs.readFileSync('/tmp/ci-log-tail.txt', 'utf8');
+            } catch (e) {
+              logTail = 'Could not read CI log.';
+            }
+
+            const failureType = '${{ steps.diagnose.outputs.failure_type }}' || 'unknown';
+
+            // Read the heal prompt for instructions
+            let healInstructions = '';
+            try {
+              healInstructions = fs.readFileSync('scripts/prompts/heal-prompt.md', 'utf8');
+            } catch (e) {
+              healInstructions = 'Fix the CI failure based on the diagnosis above.';
+            }
+
+            const title = `Auto-heal: CI ${failureType} failure on \`${{ github.ref_name }}\``;
+            const body = [
+              '## CI Pipeline Failure — Auto-Heal Request',
+              '',
+              `| Field | Value |`,
+              `|-------|-------|`,
+              `| **Branch** | \`${{ github.ref_name }}\` |`,
+              `| **Commit** | \`${{ github.sha }}\` |`,
+              `| **Failure Type** | \`${failureType}\` |`,
+              `| **Run** | [View workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) |`,
+              `| **Attempt** | ${{ github.run_attempt }} |`,
+              '',
+              '## Diagnosis',
+              '',
+              '```json',
+              diagnosis,
+              '```',
+              '',
+              '## CI Log (last 100 lines)',
+              '',
+              '```',
+              logTail,
+              '```',
+              '',
+              '## Fix Instructions',
+              '',
+              healInstructions,
+              '',
+              '---',
+              '*This issue was created automatically by the self-healing CI pipeline.*'
+            ].join('\n');
+
+            // Ensure labels exist
+            for (const label of ['ci-failure', 'auto-heal']) {
+              try {
+                await github.rest.issues.getLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name: label
+                });
+              } catch {
+                await github.rest.issues.createLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name: label,
+                  color: label === 'ci-failure' ? 'D73A4A' : '0E8A16'
+                });
+              }
+            }
+
+            // Create the issue
+            const issue = await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title,
+              body,
+              labels: ['ci-failure', 'auto-heal']
+            });
+
+            core.info(`Created issue #${issue.data.number}`);
+
+            // Assign Copilot coding agent to the issue
+            try {
+              await github.rest.issues.addAssignees({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.data.number,
+                assignees: ['copilot']
+              });
+              core.info(`Assigned Copilot coding agent to issue #${issue.data.number}`);
+            } catch (assignError) {
+              core.warning(`addAssignees failed: ${assignError.message}. Trying copilot endpoint...`);
+              try {
+                await github.request('POST /repos/{owner}/{repo}/copilot/issues/{issue_number}', {
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.data.number
+                });
+                core.info(`Assigned Copilot via copilot endpoint to issue #${issue.data.number}`);
+              } catch (copilotError) {
+                core.setFailed(`Could not assign Copilot to issue #${issue.data.number}: ${copilotError.message}`);
+              }
+            }
 
       - name: Upload heal audit
         if: always()
