@@ -284,9 +284,42 @@ jobs:
             exit 0
           fi
           echo "Assigning Copilot coding agent to issue #$ISSUE..."
-          gh api repos/${{ github.repository }}/issues/$ISSUE/copilot --method POST || \
-            gh api repos/${{ github.repository }}/issues/$ISSUE/assignees --method POST -f "assignees[]=copilot" || \
-            echo "::warning::Could not assign Copilot to issue #$ISSUE"
+
+          # Get the issue's node ID via GraphQL
+          ISSUE_NODE_ID=$(gh api graphql -f query='
+            query($owner: String!, $repo: String!, $number: Int!) {
+              repository(owner: $owner, name: $repo) {
+                issue(number: $number) { id }
+              }
+            }' -f owner="${{ github.repository_owner }}" \
+               -f repo="$(echo '${{ github.repository }}' | cut -d/ -f2)" \
+               -F number="$ISSUE" \
+               --jq '.data.repository.issue.id')
+
+          if [ -z "$ISSUE_NODE_ID" ]; then
+            echo "::warning::Could not retrieve issue node ID for #$ISSUE"
+            exit 0
+          fi
+
+          # Assign Copilot via GraphQL mutation (bot node ID)
+          COPILOT_BOT_ID="BOT_kgDOC9w8XQ"
+          RESULT=$(gh api graphql -f query="
+            mutation {
+              addAssigneesToAssignable(input: {
+                assignableId: \"$ISSUE_NODE_ID\",
+                assigneeIds: [\"$COPILOT_BOT_ID\"]
+              }) {
+                assignable {
+                  ... on Issue { assignees(first: 5) { nodes { login } } }
+                }
+              }
+            }" 2>&1) || true
+
+          if echo "$RESULT" | grep -q '"Copilot"'; then
+            echo "Successfully assigned Copilot to issue #$ISSUE"
+          else
+            echo "::warning::GraphQL mutation may have failed. Response: $RESULT"
+          fi
 
       - name: Upload heal audit
         if: always()
