@@ -1,0 +1,9 @@
+node_modules/
+test-results.json
+test-output.txt
+lint-output.json
+coverage/
+.heal-attempt-count
+heal-audit-*.json
+*.log
+.DS_Store

@@ -1,0 +1,125 @@
+# ============================================================================
+# Reusable Self-Healing Workflow
+# ============================================================================
+# Call this workflow from any repository to add self-healing capabilities.
+#
+# Usage in your workflow:
+#   jobs:
+#     heal:
+#       uses: <owner>/<repo>/.github/workflows/heal-reusable.yml@main
+#       with:
+#         test-command: 'npm test'
+#         lint-command: 'npm run lint'
+#         node-version: '20'
+#       secrets:
+#         copilot-token: ${{ secrets.COPILOT_TOKEN }}
+# ============================================================================
+
+name: Self-Healing (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      test-command:
+        description: 'Command to run tests'
+        required: false
+        default: 'npm test'
+        type: string
+      lint-command:
+        description: 'Command to run linter'
+        required: false
+        default: 'npm run lint'
+        type: string
+      build-command:
+        description: 'Command to run build'
+        required: false
+        default: 'npm run build'
+        type: string
+      node-version:
+        description: 'Node.js version'
+        required: false
+        default: '20'
+        type: string
+      max-attempts:
+        description: 'Maximum auto-heal attempts'
+        required: false
+        default: 3
+        type: number
+      copilot-agent:
+        description: 'Copilot agent name to use'
+        required: false
+        default: 'auto-healer'
+        type: string
+    secrets:
+      copilot-token:
+        description: 'GitHub token with Copilot permissions'
+        required: true
+
+jobs:
+  heal:
+    name: Auto-Heal
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.copilot-token }}
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Copilot CLI
+        run: npm install -g @github/copilot
+        env:
+          GH_TOKEN: ${{ secrets.copilot-token }}
+
+      - name: Reproduce failures
+        run: |
+          ${{ inputs.lint-command }} 2>&1 | tee ci-output.log || true
+          ${{ inputs.build-command }} 2>&1 | tee -a ci-output.log || true
+          ${{ inputs.test-command }} 2>&1 | tee -a ci-output.log || true
+
+      - name: Run self-healing
+        env:
+          GH_TOKEN: ${{ secrets.copilot-token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+        run: |
+          if [[ -f scripts/heal.sh ]]; then
+            chmod +x scripts/heal.sh scripts/handlers/*.sh
+            bash scripts/heal.sh \
+              --log-file ci-output.log \
+              --max-attempts ${{ inputs.max-attempts }} \
+              --mode direct
+          else
+            echo "heal.sh not found — using inline Copilot invocation"
+            LOG_TAIL=$(tail -150 ci-output.log)
+            copilot -p "CI pipeline failed. Here are the last 150 lines of the log. Diagnose and fix the issue. Only edit source and test files. ${LOG_TAIL}" \
+              --agent=${{ inputs.copilot-agent }} \
+              --allow-all-tools
+          fi
+
+      - name: Commit and push fix
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          if git diff --quiet && git diff --cached --quiet; then
+            echo "No changes to commit"
+            exit 1
+          fi
+
+          git add src/ tests/
+          git commit -m "fix: auto-heal CI failure (reusable workflow)
+
+          Applied by self-healing CI pipeline using GitHub Copilot CLI."
+          git push

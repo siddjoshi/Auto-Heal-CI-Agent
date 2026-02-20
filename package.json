@@ -1,0 +1,30 @@
+{
+  "name": "auto-heal-ci-agent",
+  "version": "1.0.0",
+  "description": "Self-healing CI/CD pipeline with GitHub Copilot CLI agent",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "jest --verbose",
+    "test:json": "jest --json --outputFile=test-results.json --verbose 2>&1 | tee test-output.txt; exit ${PIPESTATUS[0]:-$?}",
+    "lint": "eslint src/ tests/",
+    "lint:json": "eslint src/ tests/ --format json --output-file lint-output.json; exit ${PIPESTATUS[0]:-$?}",
+    "build": "node -e \"require('./src/app'); console.log('Build check passed');\""
+  },
+  "keywords": ["ci", "self-healing", "copilot", "automation"],
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.21.0"
+  },
+  "devDependencies": {
+    "eslint": "^8.57.0",
+    "jest": "^29.7.0",
+    "supertest": "^6.3.4"
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "verbose": true,
+    "collectCoverage": false,
+    "testMatch": ["**/tests/**/*.test.js"]
+  }
+}
