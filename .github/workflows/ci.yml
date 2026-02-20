@@ -274,24 +274,24 @@ jobs:
 
             // Assign Copilot coding agent to the issue
             try {
-              await github.rest.issues.addAssignees({
+              await github.request('POST /repos/{owner}/{repo}/issues/{issue_number}/copilot', {
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                issue_number: issue.data.number,
-                assignees: ['copilot']
+                issue_number: issue.data.number
               });
               core.info(`Assigned Copilot coding agent to issue #${issue.data.number}`);
-            } catch (assignError) {
-              core.warning(`addAssignees failed: ${assignError.message}. Trying copilot endpoint...`);
+            } catch (copilotError) {
+              core.warning(`Copilot endpoint failed: ${copilotError.message}. Trying addAssignees...`);
               try {
-                await github.request('POST /repos/{owner}/{repo}/copilot/issues/{issue_number}', {
+                await github.rest.issues.addAssignees({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
-                  issue_number: issue.data.number
+                  issue_number: issue.data.number,
+                  assignees: ['copilot']
                 });
-                core.info(`Assigned Copilot via copilot endpoint to issue #${issue.data.number}`);
-              } catch (copilotError) {
-                core.setFailed(`Could not assign Copilot to issue #${issue.data.number}: ${copilotError.message}`);
+                core.info(`Assigned copilot via addAssignees to issue #${issue.data.number}`);
+              } catch (assignError) {
+                core.setFailed(`Could not assign Copilot to issue #${issue.data.number}: ${assignError.message}`);
               }
             }
 
