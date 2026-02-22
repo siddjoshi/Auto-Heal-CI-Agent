@@ -86,6 +86,14 @@ function commit({ repoRoot, config, context, mode = 'push' }) {
     execSync(`git add "${file}"`, { cwd: repoRoot, stdio: 'pipe' });
   }
 
+  // Configure git identity if not already set
+  try {
+    execSync('git config user.name', { cwd: repoRoot, stdio: 'pipe' });
+  } catch {
+    execSync('git config user.name "auto-heal-bot"', { cwd: repoRoot, stdio: 'pipe' });
+    execSync('git config user.email "auto-heal-bot@users.noreply.github.com"', { cwd: repoRoot, stdio: 'pipe' });
+  }
+
   const attempt = context.attempt || 1;
   const commitMsg = `fix(auto-heal): ${context.diagnosisType || 'ci-failure'} (attempt ${attempt})`;
 
