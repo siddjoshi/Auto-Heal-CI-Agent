@@ -36,6 +36,11 @@ commands:
   build: npm run build
   install: npm ci
 
+# Copilot coding agent settings (copilot-agent backend)
+# copilot:
+#   # Bot node ID — override for GHES instances with a different Copilot bot ID
+#   botId: BOT_kgDOC9w8XQ
+
 # Maximum self-heal attempts per CI run
 max-attempts: 3
 

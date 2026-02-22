@@ -22,6 +22,9 @@ const DEFAULTS = {
     build: 'npm run build',
     install: 'npm ci',
   },
+  copilot: {
+    botId: 'BOT_kgDOC9w8XQ',
+  },
   maxAttempts: 3,
   autoMerge: false,
 };
@@ -117,6 +120,10 @@ function normalizeConfig(raw) {
 
   if (raw.commands && typeof raw.commands === 'object') {
     config.commands = { ...DEFAULTS.commands, ...raw.commands };
+  }
+
+  if (raw.copilot && typeof raw.copilot === 'object') {
+    config.copilot = { ...DEFAULTS.copilot, ...raw.copilot };
   }
 
   return config;

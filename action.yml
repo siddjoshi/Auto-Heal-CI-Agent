@@ -1,0 +1,118 @@
+name: 'Auto-Heal CI Agent'
+description: 'Self-healing CI pipeline — diagnoses failures and applies AI-powered fixes automatically.'
+author: 'siddjoshi'
+
+branding:
+  icon: 'activity'
+  color: 'green'
+
+inputs:
+  backend:
+    description: 'AI backend: copilot-agent, copilot-cli, or llm-api'
+    required: false
+    default: 'copilot-agent'
+  language:
+    description: 'Language ecosystem: node, python, go, dotnet'
+    required: false
+    default: 'node'
+  log-file:
+    description: 'Path to the CI log file (relative to repo root)'
+    required: false
+    default: 'ci-output.log'
+  commit-mode:
+    description: 'Commit mode: push, pr, or none'
+    required: false
+    default: 'none'
+  attempt:
+    description: 'Current heal attempt number'
+    required: false
+    default: '1'
+  max-attempts:
+    description: 'Maximum number of heal attempts'
+    required: false
+    default: '3'
+  dry-run:
+    description: 'If true, diagnose only — do not apply fixes'
+    required: false
+    default: 'false'
+  llm-provider:
+    description: 'LLM provider (when backend=llm-api): openai, anthropic, azure-openai, github-models'
+    required: false
+  llm-model:
+    description: 'LLM model name (when backend=llm-api)'
+    required: false
+
+outputs:
+  diagnosis-type:
+    description: 'Type of failure diagnosed (lint, test, build, dependency, unknown)'
+    value: ${{ steps.heal.outputs.diagnosis_type }}
+  healable:
+    description: 'Whether the failure is healable'
+    value: ${{ steps.heal.outputs.healable }}
+  fix-result:
+    description: 'Result of the fix attempt (success or failure reason)'
+    value: ${{ steps.heal.outputs.fix_result }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+
+    - name: Run heal-agent engine
+      id: heal
+      shell: bash
+      env:
+        HEAL_BACKEND: ${{ inputs.backend }}
+        HEAL_LANGUAGE: ${{ inputs.language }}
+        HEAL_LLM_PROVIDER: ${{ inputs.llm-provider }}
+        HEAL_LLM_MODEL: ${{ inputs.llm-model }}
+      run: |
+        ENGINE="${{ github.action_path }}/engine/index.js"
+
+        ARGS="--repo-root $GITHUB_WORKSPACE"
+        ARGS="$ARGS --backend ${{ inputs.backend }}"
+        ARGS="$ARGS --language ${{ inputs.language }}"
+        ARGS="$ARGS --log-file ${{ inputs.log-file }}"
+        ARGS="$ARGS --attempt ${{ inputs.attempt }}"
+        ARGS="$ARGS --max-attempts ${{ inputs.max-attempts }}"
+        ARGS="$ARGS --commit-mode ${{ inputs.commit-mode }}"
+
+        if [[ "${{ inputs.dry-run }}" == "true" ]]; then
+          ARGS="$ARGS --dry-run"
+        fi
+
+        ARGS="$ARGS --verbose"
+
+        echo "[action] Running: node $ENGINE $ARGS"
+        OUTPUT=$(node "$ENGINE" $ARGS 2>&1) || EXIT_CODE=$?
+        EXIT_CODE=${EXIT_CODE:-0}
+
+        echo "$OUTPUT"
+
+        # Parse diagnosis type from output
+        DIAG_TYPE=$(echo "$OUTPUT" | grep -oP 'type=\K[^,]+' | head -1 || echo "unknown")
+        HEALABLE=$(echo "$OUTPUT" | grep -oP 'healable=\K[^,\s]+' | head -1 || echo "false")
+
+        if [[ $EXIT_CODE -eq 0 ]]; then
+          FIX_RESULT="success"
+        else
+          FIX_RESULT="failure"
+        fi
+
+        echo "diagnosis_type=$DIAG_TYPE" >> "$GITHUB_OUTPUT"
+        echo "healable=$HEALABLE" >> "$GITHUB_OUTPUT"
+        echo "fix_result=$FIX_RESULT" >> "$GITHUB_OUTPUT"
+
+        exit $EXIT_CODE
+
+    - name: Upload heal audit
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: heal-audit-attempt-${{ inputs.attempt }}
+        path: ${{ github.workspace }}/.heal-audit/
+        retention-days: 30
+        if-no-files-found: ignore

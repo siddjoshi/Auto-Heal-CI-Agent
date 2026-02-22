@@ -138,7 +138,16 @@ function createPR(repoRoot, context, commitMsg, files) {
 
     const result = execSync(
       `gh pr create --base "${context.branch || 'main'}" --head "${healBranch}" --title "${prTitle}" --body "${prBody}"`,
-      { cwd: repoRoot, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }
+      {
+        cwd: repoRoot,
+        encoding: 'utf8',
+        stdio: ['pipe', 'pipe', 'pipe'],
+        env: {
+          ...process.env,
+          GH_TOKEN: context.ghPat || process.env.GH_PAT || process.env.GH_TOKEN,
+          ...(context.ghHost ? { GH_HOST: context.ghHost } : {}),
+        },
+      }
     );
 
     return { success: true, mode: 'pr', branch: healBranch, files, prUrl: result.trim() };

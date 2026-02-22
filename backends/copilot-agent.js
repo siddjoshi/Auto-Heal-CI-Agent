@@ -14,7 +14,7 @@ const { execSync } = require('child_process');
  * Uses: GitHub REST API + GraphQL mutation for Copilot assignment.
  */
 
-const COPILOT_BOT_ID = 'BOT_kgDOC9w8XQ';
+const DEFAULT_COPILOT_BOT_ID = 'BOT_kgDOC9w8XQ';
 
 /**
  * Build the issue body from diagnosis and context.
@@ -63,6 +63,12 @@ async function fix(diagnosis, context, config) {
   const owner = context.owner || process.env.GITHUB_REPOSITORY_OWNER;
   const repo = context.repo || (process.env.GITHUB_REPOSITORY || '').split('/')[1];
   const ghToken = context.ghPat || process.env.GH_PAT || process.env.GH_TOKEN;
+  const copilotBotId = process.env.COPILOT_BOT_ID || config.copilot?.botId || DEFAULT_COPILOT_BOT_ID;
+  const ghEnv = {
+    ...process.env,
+    GH_TOKEN: ghToken,
+    ...(context.ghHost ? { GH_HOST: context.ghHost } : {}),
+  };
 
   if (!owner || !repo) {
     throw new Error('Repository owner/name not available. Set GITHUB_REPOSITORY or pass owner/repo in context.');
@@ -108,7 +114,7 @@ async function fix(diagnosis, context, config) {
   try {
     const result = execSync(issueArgs.join(' '), {
       cwd: repoRoot,
-      env: { ...process.env, GH_TOKEN: ghToken },
+      env: ghEnv,
       encoding: 'utf8',
       stdio: ['pipe', 'pipe', 'pipe'],
     });
@@ -127,7 +133,7 @@ async function fix(diagnosis, context, config) {
     const result = execSync(
       `gh api graphql -f query='${nodeIdQuery}' -f owner='${owner}' -f repo='${repo}' -F number=${issueNumber} --jq '.data.repository.issue.id'`,
       {
-        env: { ...process.env, GH_TOKEN: ghToken },
+        env: ghEnv,
         encoding: 'utf8',
         stdio: ['pipe', 'pipe', 'pipe'],
       }
@@ -139,12 +145,12 @@ async function fix(diagnosis, context, config) {
   }
 
   // Assign Copilot via GraphQL mutation
-  const mutation = `mutation{addAssigneesToAssignable(input:{assignableId:"${issueNodeId}",assigneeIds:["${COPILOT_BOT_ID}"]}){assignable{...on Issue{assignees(first:5){nodes{login}}}}}}`;
+  const mutation = `mutation{addAssigneesToAssignable(input:{assignableId:"${issueNodeId}",assigneeIds:["${copilotBotId}"]}){assignable{...on Issue{assignees(first:5){nodes{login}}}}}}`;
   try {
     const result = execSync(
       `gh api graphql -f query='${mutation}'`,
       {
-        env: { ...process.env, GH_TOKEN: ghToken },
+        env: ghEnv,
         encoding: 'utf8',
         stdio: ['pipe', 'pipe', 'pipe'],
       }

@@ -63,6 +63,7 @@ async function fix(diagnosis, context, config) {
         env: {
           ...process.env,
           GH_TOKEN: context.copilotToken || process.env.COPILOT_TOKEN || process.env.GH_TOKEN,
+          ...(context.ghHost ? { GH_HOST: context.ghHost } : {}),
         },
         encoding: 'utf8',
         timeout: 300000, // 5 minutes

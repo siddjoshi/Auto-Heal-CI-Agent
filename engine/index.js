@@ -142,6 +142,10 @@ function buildContext(opts, config) {
     attempt: opts.attempt || 1,
     ghPat: process.env.GH_PAT,
     copilotToken: process.env.COPILOT_TOKEN,
+    ghHost: process.env.GH_HOST
+      || (process.env.GITHUB_SERVER_URL && process.env.GITHUB_SERVER_URL !== 'https://github.com'
+        ? process.env.GITHUB_SERVER_URL.replace(/^https?:\/\//, '')
+        : undefined),
     logTail: readLogTail(opts.logFile),
     diagnosisType: null, // Set after diagnosis
   };
