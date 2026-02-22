@@ -164,7 +164,7 @@ async function fix(diagnosis, context, config) {
     throw new Error('GH_TOKEN, GH_PAT, or COPILOT_TOKEN is required for the copilot-cli backend.');
   }
 
-  const model = process.env.HEAL_LLM_MODEL || config.llm?.model || DEFAULT_MODEL;
+  const model = process.env.HEAL_COPILOT_CLI_MODEL || process.env.HEAL_LLM_MODEL || config.llm?.model || DEFAULT_MODEL;
   const healPrompt = renderPrompt(diagnosis, context, config);
   const relevantFiles = readRelevantFiles(repoRoot, diagnosis);
 

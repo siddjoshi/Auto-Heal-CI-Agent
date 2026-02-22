@@ -38,10 +38,13 @@ inputs:
   llm-provider:
     description: 'LLM provider (when backend=llm-api): openai, anthropic, azure-openai, github-models'
     required: false
-  llm-model:
-    description: 'LLM model name (used by copilot-cli and llm-api backends, e.g. gpt-4o, gpt-4.1)'
+  copilot-cli-model:
+    description: 'LLM model name for copilot-cli backend (e.g. gpt-4o, gpt-4.1)'
     required: false
     default: 'gpt-4o'
+  llm-model:
+    description: 'LLM model name (when backend=llm-api)'
+    required: false
 
 outputs:
   diagnosis-type:
@@ -69,6 +72,7 @@ runs:
         HEAL_BACKEND: ${{ inputs.backend }}
         HEAL_LANGUAGE: ${{ inputs.language }}
         HEAL_LLM_PROVIDER: ${{ inputs.llm-provider }}
+        HEAL_COPILOT_CLI_MODEL: ${{ inputs.copilot-cli-model }}
         HEAL_LLM_MODEL: ${{ inputs.llm-model }}
       run: |
         ENGINE="${{ github.action_path }}/engine/index.js"
