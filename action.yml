@@ -39,8 +39,9 @@ inputs:
     description: 'LLM provider (when backend=llm-api): openai, anthropic, azure-openai, github-models'
     required: false
   llm-model:
-    description: 'LLM model name (when backend=llm-api)'
+    description: 'LLM model name (used by copilot-cli and llm-api backends, e.g. gpt-4o, gpt-4.1)'
     required: false
+    default: 'gpt-4o'
 
 outputs:
   diagnosis-type:
