@@ -1,7 +1,7 @@
 const express = require('express');
 const taskRoutes = require('./routes/tasks');
 
-var app = express();  // eslint: should be const
+const app = express();
 
 // Middleware
 app.use(express.json());
