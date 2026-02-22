@@ -143,7 +143,7 @@ async function fix(diagnosis, context, config) {
     issueNodeId = result.trim();
   } catch (err) {
     console.error(`Warning: Could not retrieve issue node ID: ${err.message}`);
-    return { issueNumber, assigned: false };
+    return { success: true, issueNumber, assigned: false };
   }
 
   // Assign Copilot via GraphQL mutation
@@ -159,10 +159,10 @@ async function fix(diagnosis, context, config) {
     });
     const assigned = result.includes('Copilot') || result.includes('copilot');
     console.log(assigned ? `Assigned Copilot to issue #${issueNumber}` : `Warning: Copilot assignment may have failed`);
-    return { issueNumber, assigned };
+    return { success: true, issueNumber, assigned };
   } catch (err) {
     console.error(`Warning: Copilot assignment failed: ${err.message}`);
-    return { issueNumber, assigned: false };
+    return { success: true, issueNumber, assigned: false };
   }
 }
 
