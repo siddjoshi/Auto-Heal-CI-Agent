@@ -1,0 +1,124 @@
+# Reusable GitHub Actions workflow for self-healing CI.
+#
+# Usage in your repo's workflow:
+#
+#   jobs:
+#     build-and-test:
+#       # ... your build/test steps ...
+#
+#     auto-heal:
+#       needs: build-and-test
+#       if: failure()
+#       uses: <owner>/Auto-heal-CI-Agent/.github/workflows/heal-reusable.yml@main
+#       with:
+#         backend: copilot-agent
+#         language: node
+#       secrets:
+#         gh-pat: ${{ secrets.GH_PAT }}
+
+name: Self-Healing CI (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      backend:
+        type: string
+        default: 'copilot-agent'
+        description: 'AI backend: copilot-agent, copilot-cli, llm-api'
+      language:
+        type: string
+        default: 'node'
+        description: 'Language ecosystem: node, python, go, dotnet'
+      max-attempts:
+        type: string
+        default: '3'
+        description: 'Maximum heal attempts'
+      commit-mode:
+        type: string
+        default: 'none'
+        description: 'Commit mode: push, pr, none'
+      llm-provider:
+        type: string
+        default: 'openai'
+        description: 'LLM provider for llm-api backend'
+      llm-model:
+        type: string
+        default: 'gpt-4o'
+        description: 'LLM model name'
+    secrets:
+      gh-pat:
+        description: 'GitHub PAT with repo scope (for copilot-agent backend)'
+        required: false
+      llm-api-key:
+        description: 'LLM API key (for llm-api backend)'
+        required: false
+      copilot-token:
+        description: 'Copilot token (for copilot-cli backend)'
+        required: false
+
+jobs:
+  heal:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.gh-pat || github.token }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Download CI log artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ci-log
+          path: .
+        continue-on-error: true
+
+      - name: Capture CI log from workflow
+        if: always()
+        run: |
+          # If no artifact, create a minimal log from the run
+          if [ ! -f ci.log ]; then
+            echo "No ci.log artifact found. Using workflow run log." > ci.log
+            gh run view ${{ github.run_id }} --log-failed 2>/dev/null >> ci.log || true
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.gh-pat || github.token }}
+
+      - name: Install heal-agent dependencies
+        run: npm ci --ignore-scripts 2>/dev/null || npm install 2>/dev/null || true
+
+      - name: Run heal-agent
+        env:
+          GH_PAT: ${{ secrets.gh-pat }}
+          GH_TOKEN: ${{ secrets.gh-pat || github.token }}
+          LLM_API_KEY: ${{ secrets.llm-api-key }}
+          COPILOT_TOKEN: ${{ secrets.copilot-token }}
+          HEAL_BACKEND: ${{ inputs.backend }}
+          HEAL_LANGUAGE: ${{ inputs.language }}
+          HEAL_LLM_PROVIDER: ${{ inputs.llm-provider }}
+          HEAL_LLM_MODEL: ${{ inputs.llm-model }}
+        run: |
+          node engine/index.js \
+            --backend "${{ inputs.backend }}" \
+            --language "${{ inputs.language }}" \
+            --log-file ci.log \
+            --attempt 1 \
+            --max-attempts "${{ inputs.max-attempts }}" \
+            --commit-mode "${{ inputs.commit-mode }}" \
+            --verbose
+
+      - name: Upload heal audit
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: heal-audit
+          path: .heal-audit/
+          if-no-files-found: ignore

@@ -1,0 +1,43 @@
+# Self-Healing CI Agent Configuration
+# Place this file in your repository root as .heal-agent.yml
+
+# AI backend to use for generating fixes
+# Options: copilot-agent | copilot-cli | llm-api
+backend: copilot-agent
+
+# Source language / ecosystem
+# Options: node | python | go | dotnet
+language: node
+
+# LLM settings (only used when backend: llm-api)
+llm:
+  # Options: openai | anthropic | azure-openai | github-models
+  provider: openai
+  model: gpt-4o
+
+# File path rules
+paths:
+  # Directories the agent is allowed to modify
+  allowed:
+    - src/
+    - tests/
+    - lib/
+    - test/
+  # Paths the agent must never modify (reverted automatically)
+  protected:
+    - .github/
+    - scripts/
+    - .env
+
+# Validation commands (used to verify fixes)
+commands:
+  lint: npm run lint
+  test: npm test
+  build: npm run build
+  install: npm ci
+
+# Maximum self-heal attempts per CI run
+max-attempts: 3
+
+# Auto-merge PRs created by the agent (use with caution)
+auto-merge: false

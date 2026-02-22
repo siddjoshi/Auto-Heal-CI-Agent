@@ -1,0 +1,92 @@
+# Azure DevOps Pipeline template for self-healing CI.
+#
+# Usage in your azure-pipelines.yml:
+#
+#   stages:
+#     - stage: Build
+#       jobs:
+#         - job: BuildAndTest
+#           steps:
+#             - script: npm ci && npm test
+#
+#     - stage: AutoHeal
+#       condition: failed()
+#       jobs:
+#         - template: path/to/heal-task.yml
+#           parameters:
+#             backend: llm-api
+#             language: node
+
+parameters:
+  - name: backend
+    type: string
+    default: 'llm-api'
+    values:
+      - copilot-agent
+      - copilot-cli
+      - llm-api
+  - name: language
+    type: string
+    default: 'node'
+  - name: maxAttempts
+    type: number
+    default: 3
+  - name: commitMode
+    type: string
+    default: 'pr'
+    values:
+      - push
+      - pr
+      - none
+  - name: llmProvider
+    type: string
+    default: 'openai'
+  - name: llmModel
+    type: string
+    default: 'gpt-4o'
+
+jobs:
+  - job: SelfHeal
+    displayName: 'Self-Healing CI'
+    pool:
+      vmImage: 'ubuntu-latest'
+    steps:
+      - checkout: self
+        persistCredentials: true
+
+      - task: NodeTool@0
+        inputs:
+          versionSpec: '20.x'
+
+      - script: npm ci --ignore-scripts 2>/dev/null || npm install 2>/dev/null || true
+        displayName: 'Install dependencies'
+
+      - script: |
+          # Capture build log
+          echo "$(Build.SourceVersionMessage)" > ci.log
+          echo "Build failed on branch $(Build.SourceBranchName)" >> ci.log
+        displayName: 'Prepare CI log'
+
+      - script: |
+          node engine/index.js \
+            --backend "${{ parameters.backend }}" \
+            --language "${{ parameters.language }}" \
+            --log-file ci.log \
+            --attempt 1 \
+            --max-attempts "${{ parameters.maxAttempts }}" \
+            --commit-mode "${{ parameters.commitMode }}" \
+            --verbose
+        displayName: 'Run heal-agent'
+        env:
+          HEAL_BACKEND: ${{ parameters.backend }}
+          HEAL_LANGUAGE: ${{ parameters.language }}
+          HEAL_LLM_PROVIDER: ${{ parameters.llmProvider }}
+          HEAL_LLM_MODEL: ${{ parameters.llmModel }}
+          LLM_API_KEY: $(LLM_API_KEY)
+          GH_PAT: $(GH_PAT)
+          COPILOT_TOKEN: $(COPILOT_TOKEN)
+
+      - publish: .heal-audit
+        artifact: heal-audit
+        condition: always()
+        displayName: 'Publish heal audit'

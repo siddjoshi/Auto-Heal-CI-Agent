@@ -138,7 +138,7 @@ jobs:
           name: ci-failure-artifacts
         continue-on-error: true
 
-      - name: Reproduce failures and diagnose
+      - name: Diagnose failures with heal-agent engine
         id: diagnose
         run: |
           # Re-run failing steps to generate fresh output files
@@ -146,40 +146,24 @@ jobs:
           npm run test:json 2>&1 || true
           npm run build 2>&1 | tee ci-output.log || true
 
-          # Run failure handlers to classify the issue
-          chmod +x scripts/handlers/*.sh
-          DIAGNOSIS=""
-          FAILURE_TYPE="unknown"
+          # Use the new engine for diagnosis (dry-run mode)
+          DIAGNOSIS=$(node engine/index.js \
+            --language node \
+            --log-file ci-output.log \
+            --dry-run 2>&1) || true
 
-          for handler in scripts/handlers/*-handler.sh; do
-            if [ ! -f "$handler" ]; then continue; fi
-            handler_name=$(basename "$handler" .sh)
-            echo "Trying handler: $handler_name"
-
-            if handler_output=$(bash "$handler" ci-output.log 2>/dev/null); then
-              echo "Handler matched: $handler_name"
-              DIAGNOSIS="$handler_output"
-              FAILURE_TYPE=$(echo "$handler_output" | node -e "
-                let d=''; process.stdin.on('data',c=>d+=c);
-                process.stdin.on('end',()=>{ try{console.log(JSON.parse(d).type)}catch(e){console.log('unknown')} });
-              ")
-              break
-            fi
-          done
-
-          if [ -z "$DIAGNOSIS" ]; then
-            DIAGNOSIS='{"type":"unknown","healable":true,"failures":[],"relevantFiles":[]}'
-          fi
+          FAILURE_TYPE=$(echo "$DIAGNOSIS" | node -e "
+            let d=''; process.stdin.on('data',c=>d+=c);
+            process.stdin.on('end',()=>{ try{console.log(JSON.parse(d).type)}catch(e){console.log('unknown')} });
+          " 2>/dev/null) || FAILURE_TYPE="unknown"
 
           echo "failure_type=$FAILURE_TYPE" >> "$GITHUB_OUTPUT"
 
-          # Save diagnosis and log tail to files for the next step
-          echo "$DIAGNOSIS" > /tmp/diagnosis.json
-          tail -100 ci-output.log > /tmp/ci-log-tail.txt 2>/dev/null || true
-
-          # Save to audit directory
+          # Save diagnosis and log tail for the issue creation step
           mkdir -p .heal-audit
+          echo "$DIAGNOSIS" > /tmp/diagnosis.json
           cp /tmp/diagnosis.json .heal-audit/diagnosis.json
+          tail -100 ci-output.log > /tmp/ci-log-tail.txt 2>/dev/null || true
 
       - name: Create issue
         id: create-issue

@@ -1,0 +1,76 @@
+name: 'Self-Healing CI Agent'
+description: 'Diagnose and auto-fix CI failures using AI backends (Copilot Agent, Copilot CLI, or LLM API)'
+author: 'Auto-Heal CI'
+
+inputs:
+  backend:
+    description: 'AI backend: copilot-agent, copilot-cli, or llm-api'
+    required: false
+    default: 'copilot-agent'
+  language:
+    description: 'Language ecosystem: node, python, go, dotnet'
+    required: false
+    default: 'node'
+  log-file:
+    description: 'Path to the CI log file for diagnosis'
+    required: false
+    default: 'ci.log'
+  attempt:
+    description: 'Current heal attempt number'
+    required: false
+    default: '1'
+  max-attempts:
+    description: 'Maximum number of heal attempts'
+    required: false
+    default: '3'
+  commit-mode:
+    description: 'How to commit fixes: push, pr, or none'
+    required: false
+    default: 'none'
+  dry-run:
+    description: 'If true, diagnose only without applying fixes'
+    required: false
+    default: 'false'
+  llm-provider:
+    description: 'LLM provider (when backend=llm-api): openai, anthropic, azure-openai, github-models'
+    required: false
+    default: 'openai'
+  llm-model:
+    description: 'LLM model name'
+    required: false
+    default: 'gpt-4o'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+
+    - name: Install heal-agent
+      shell: bash
+      run: |
+        cd ${{ github.action_path }}/../..
+        npm ci --ignore-scripts 2>/dev/null || true
+
+    - name: Run heal-agent
+      shell: bash
+      env:
+        HEAL_BACKEND: ${{ inputs.backend }}
+        HEAL_LANGUAGE: ${{ inputs.language }}
+        HEAL_LLM_PROVIDER: ${{ inputs.llm-provider }}
+        HEAL_LLM_MODEL: ${{ inputs.llm-model }}
+      run: |
+        ARGS="--backend ${{ inputs.backend }}"
+        ARGS="$ARGS --language ${{ inputs.language }}"
+        ARGS="$ARGS --log-file ${{ inputs.log-file }}"
+        ARGS="$ARGS --attempt ${{ inputs.attempt }}"
+        ARGS="$ARGS --max-attempts ${{ inputs.max-attempts }}"
+        ARGS="$ARGS --commit-mode ${{ inputs.commit-mode }}"
+
+        if [[ "${{ inputs.dry-run }}" == "true" ]]; then
+          ARGS="$ARGS --dry-run"
+        fi
+
+        node ${{ github.action_path }}/../../engine/index.js $ARGS

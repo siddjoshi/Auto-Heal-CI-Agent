@@ -1,0 +1,67 @@
+# GitLab CI template for self-healing CI.
+#
+# Usage in your .gitlab-ci.yml:
+#
+#   include:
+#     - local: path/to/.heal-ci.yml
+#
+#   stages:
+#     - build
+#     - test
+#     - heal
+#
+#   build:
+#     stage: build
+#     script: npm ci && npm run build
+#
+#   test:
+#     stage: test
+#     script: npm test
+#
+#   auto-heal:
+#     stage: heal
+#     extends: .heal-job
+#     when: on_failure
+#     variables:
+#       HEAL_BACKEND: llm-api
+#       HEAL_LANGUAGE: node
+
+.heal-job:
+  image: node:20
+  stage: heal
+  when: on_failure
+  variables:
+    HEAL_BACKEND: 'llm-api'
+    HEAL_LANGUAGE: 'node'
+    HEAL_LLM_PROVIDER: 'openai'
+    HEAL_LLM_MODEL: 'gpt-4o'
+    HEAL_MAX_ATTEMPTS: '3'
+    HEAL_COMMIT_MODE: 'pr'
+  before_script:
+    - npm ci --ignore-scripts 2>/dev/null || npm install 2>/dev/null || true
+    - git config user.email "heal-agent@ci"
+    - git config user.name "Heal Agent"
+    - |
+      # Capture CI log
+      if [ -f "$CI_PROJECT_DIR/ci.log" ]; then
+        echo "Using existing ci.log"
+      else
+        echo "Pipeline $CI_PIPELINE_ID failed on branch $CI_COMMIT_REF_NAME" > ci.log
+        echo "Commit: $CI_COMMIT_SHA" >> ci.log
+      fi
+  script:
+    - |
+      node engine/index.js \
+        --backend "$HEAL_BACKEND" \
+        --language "$HEAL_LANGUAGE" \
+        --log-file ci.log \
+        --attempt 1 \
+        --max-attempts "$HEAL_MAX_ATTEMPTS" \
+        --commit-mode "$HEAL_COMMIT_MODE" \
+        --verbose
+  artifacts:
+    paths:
+      - .heal-audit/
+    when: always
+    expire_in: 7 days
+  allow_failure: true
