@@ -2,7 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { execSync } = require('child_process');
+const { execSync, execFileSync } = require('child_process');
 
 /**
  * Copilot Coding Agent backend.
@@ -100,19 +100,18 @@ async function fix(diagnosis, context, config) {
   const body = buildIssueBody(diagnosis, context, healPrompt);
 
   // Create issue via gh CLI (avoids needing octokit dependency)
-  const issueArgs = [
-    'gh', 'api',
-    `repos/${owner}/${repo}/issues`,
-    '-X', 'POST',
-    '-f', `title=${title}`,
-    '-f', `body=${body}`,
-    '-f', 'labels[]=ci-failure',
-    '-f', 'labels[]=auto-heal',
-  ];
-
+  // Use execFileSync to avoid shell interpretation of backticks in title/body
   let issueNumber;
   try {
-    const result = execSync(issueArgs.join(' '), {
+    const result = execFileSync('gh', [
+      'api',
+      `repos/${owner}/${repo}/issues`,
+      '-X', 'POST',
+      '-f', `title=${title}`,
+      '-f', `body=${body}`,
+      '-f', 'labels[]=ci-failure',
+      '-f', 'labels[]=auto-heal',
+    ], {
       cwd: repoRoot,
       env: ghEnv,
       encoding: 'utf8',
@@ -122,7 +121,6 @@ async function fix(diagnosis, context, config) {
     issueNumber = parsed.number;
     console.log(`Created issue #${issueNumber}`);
   } catch (err) {
-    // Fallback: use curl-style
     throw new Error(`Failed to create GitHub issue: ${err.message}`);
   }
 
@@ -130,14 +128,18 @@ async function fix(diagnosis, context, config) {
   const nodeIdQuery = `query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){issue(number:$number){id}}}`;
   let issueNodeId;
   try {
-    const result = execSync(
-      `gh api graphql -f query='${nodeIdQuery}' -f owner='${owner}' -f repo='${repo}' -F number=${issueNumber} --jq '.data.repository.issue.id'`,
-      {
-        env: ghEnv,
-        encoding: 'utf8',
-        stdio: ['pipe', 'pipe', 'pipe'],
-      }
-    );
+    const result = execFileSync('gh', [
+      'api', 'graphql',
+      '-f', `query=${nodeIdQuery}`,
+      '-f', `owner=${owner}`,
+      '-f', `repo=${repo}`,
+      '-F', `number=${issueNumber}`,
+      '--jq', '.data.repository.issue.id',
+    ], {
+      env: ghEnv,
+      encoding: 'utf8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
     issueNodeId = result.trim();
   } catch (err) {
     console.error(`Warning: Could not retrieve issue node ID: ${err.message}`);
@@ -147,14 +149,14 @@ async function fix(diagnosis, context, config) {
   // Assign Copilot via GraphQL mutation
   const mutation = `mutation{addAssigneesToAssignable(input:{assignableId:"${issueNodeId}",assigneeIds:["${copilotBotId}"]}){assignable{...on Issue{assignees(first:5){nodes{login}}}}}}`;
   try {
-    const result = execSync(
-      `gh api graphql -f query='${mutation}'`,
-      {
-        env: ghEnv,
-        encoding: 'utf8',
-        stdio: ['pipe', 'pipe', 'pipe'],
-      }
-    );
+    const result = execFileSync('gh', [
+      'api', 'graphql',
+      '-f', `query=${mutation}`,
+    ], {
+      env: ghEnv,
+      encoding: 'utf8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
     const assigned = result.includes('Copilot') || result.includes('copilot');
     console.log(assigned ? `Assigned Copilot to issue #${issueNumber}` : `Warning: Copilot assignment may have failed`);
     return { issueNumber, assigned };
