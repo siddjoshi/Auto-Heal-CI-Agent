@@ -124,13 +124,14 @@ function createPR(repoRoot, context, commitMsg, files) {
   const attempt = context.attempt || 1;
   const healBranch = `auto-heal/attempt-${attempt}-${Date.now()}`;
 
-  // For gh pr create, prefer a PAT (GH_TOKEN / COPILOT_GITHUB_TOKEN / GH_PAT)
-  // since enterprise policies may block GITHUB_TOKEN from creating PRs.
-  // For git push, rely on actions/checkout extraheader (GITHUB_TOKEN-based).
-  const prToken = process.env.GH_TOKEN || process.env.COPILOT_GITHUB_TOKEN || process.env.GH_PAT || context.ghPat || process.env.GITHUB_TOKEN;
+  // Token strategy:
+  //   git push  → uses the Fine-Grained PAT (via actions/checkout extraheader)
+  //   gh pr create → uses GITHUB_TOKEN (Actions-provided, has pull-requests:write)
+  const pushToken = process.env.GH_TOKEN || process.env.COPILOT_GITHUB_TOKEN || process.env.GH_PAT || context.ghPat;
+  const prToken = process.env.GITHUB_TOKEN || pushToken;
 
-  // Build env with token for gh CLI operations
-  const gitEnv = {
+  // Build env for gh pr create — override GH_TOKEN with GITHUB_TOKEN
+  const prEnv = {
     ...process.env,
     ...(prToken ? { GH_TOKEN: prToken } : {}),
     ...(context.ghHost ? { GH_HOST: context.ghHost } : {}),
@@ -139,9 +140,14 @@ function createPR(repoRoot, context, commitMsg, files) {
   try {
     execFileSync('git', ['checkout', '-b', healBranch], { cwd: repoRoot, stdio: 'pipe' });
 
-    // Debug: log token sources
-    console.log(`[commit] Push via actions/checkout credentials (GITHUB_TOKEN=${process.env.GITHUB_TOKEN ? 'set(' + process.env.GITHUB_TOKEN.substring(0, 8) + '...)' : 'unset'})`);
-    console.log(`[commit] PR creation via GH_TOKEN=${prToken ? prToken.substring(0, 8) + '...' : 'unset'}`);
+    // Configure git credentials for push using PAT
+    if (pushToken) {
+      const basicAuth = Buffer.from(`x-access-token:${pushToken}`).toString('base64');
+      execFileSync('git', ['config', '--local', '--replace-all', 'http.https://github.com/.extraheader', `AUTHORIZATION: basic ${basicAuth}`], { cwd: repoRoot, stdio: 'pipe' });
+    }
+
+    console.log(`[commit] Push token: ${pushToken ? pushToken.substring(0, 8) + '...' : 'unset (using checkout credentials)'}`);
+    console.log(`[commit] PR token: ${prToken ? prToken.substring(0, 8) + '...' : 'unset'}`);
 
     execFileSync('git', ['push', 'origin', healBranch], { cwd: repoRoot, stdio: 'pipe' });
 
@@ -167,7 +173,7 @@ function createPR(repoRoot, context, commitMsg, files) {
         cwd: repoRoot,
         encoding: 'utf8',
         stdio: ['pipe', 'pipe', 'pipe'],
-        env: gitEnv,
+        env: prEnv,
       }
     );
 
