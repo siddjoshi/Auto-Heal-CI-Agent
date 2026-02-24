@@ -10,9 +10,11 @@ const { execFile, execFileSync } = require('child_process');
  * Invokes the GitHub Copilot CLI binary (@github/copilot) to diagnose and fix
  * CI failures. The binary edits files directly on disk.
  *
- * Central agents, skills, and instructions are staged into the consumer repo's
+ * Central agents and skills are staged into the consumer repo's
  * .github/ directory at runtime so the Copilot CLI binary discovers them.
  * Consumer-local files take priority (never overwritten).
+ * Instructions (.github/instructions/ and copilot-instructions.md) are NOT
+ * staged — those are owned entirely by the consumer repo.
  *
  * Requires: Fine-Grained PAT with Copilot access via COPILOT_GITHUB_TOKEN,
  * GH_TOKEN, or GITHUB_TOKEN environment variables.
@@ -175,8 +177,8 @@ function discoverInstructions(rootDir, relevantFilePaths) {
 /* ------------------------------------------------------------------ */
 
 /**
- * Stage central agents, skills, and instructions into the consumer repo's
- * .github/ directory so the Copilot CLI binary can discover them at runtime.
+ * Stage central agents and skills into the consumer repo's .github/ directory
+ * so the Copilot CLI binary can discover them at runtime.
  *
  * Consumer-local files take priority (never overwritten).
  * Returns list of staged file paths for cleanup.
@@ -219,45 +221,6 @@ function stageAgentsForDiscovery(repoRoot) {
         stagedFiles.push(targetPath);
         console.log(`[copilot-cli] Staged central skill: ${entry.name}`);
       }
-    }
-  }
-
-  // Stage central instructions
-  const centralInstrDir = path.join(ACTION_ROOT, '.github', 'instructions');
-  if (fs.existsSync(centralInstrDir)) {
-    const targetInstrDir = path.join(repoRoot, '.github', 'instructions');
-    fs.mkdirSync(targetInstrDir, { recursive: true });
-    for (const file of fs.readdirSync(centralInstrDir)) {
-      if (!file.endsWith('.md')) continue;
-      const targetPath = path.join(targetInstrDir, file);
-      if (!fs.existsSync(targetPath)) {
-        fs.copyFileSync(path.join(centralInstrDir, file), targetPath);
-        stagedFiles.push(targetPath);
-        console.log(`[copilot-cli] Staged central instruction: ${file}`);
-      }
-    }
-  }
-
-  // Stage central copilot-instructions.md (merge with consumer's if both exist)
-  const centralGlobal = path.join(ACTION_ROOT, '.github', 'copilot-instructions.md');
-  const consumerGlobal = path.join(repoRoot, '.github', 'copilot-instructions.md');
-  if (fs.existsSync(centralGlobal)) {
-    const centralContent = fs.readFileSync(centralGlobal, 'utf8');
-    if (fs.existsSync(consumerGlobal)) {
-      const consumerContent = fs.readFileSync(consumerGlobal, 'utf8');
-      if (!consumerContent.includes(centralContent.trim())) {
-        const backupPath = consumerGlobal + '.heal-backup';
-        fs.writeFileSync(backupPath, consumerContent, 'utf8');
-        stagedFiles.push(backupPath);
-        const merged = consumerContent + '\n\n---\n\n# Central Auto-Heal Instructions\n\n' + centralContent;
-        fs.writeFileSync(consumerGlobal, merged, 'utf8');
-        console.log('[copilot-cli] Merged central copilot-instructions.md with consumer');
-      }
-    } else {
-      fs.mkdirSync(path.join(repoRoot, '.github'), { recursive: true });
-      fs.copyFileSync(centralGlobal, consumerGlobal);
-      stagedFiles.push(consumerGlobal);
-      console.log('[copilot-cli] Staged central copilot-instructions.md');
     }
   }
 
@@ -447,8 +410,8 @@ async function fix(diagnosis, context, config) {
   const { repoRoot } = context;
   const agentName = config.copilot?.agentName || 'auto-healer';
 
-  // Step 1: Stage central agents/skills/instructions for Copilot CLI discovery
-  console.log('[copilot-cli] Staging central agents/skills/instructions...');
+  // Step 1: Stage central agents/skills for Copilot CLI discovery
+  console.log('[copilot-cli] Staging central agents/skills...');
   let stagedFiles = [];
   try {
     stagedFiles = stageAgentsForDiscovery(repoRoot);
@@ -486,6 +449,15 @@ async function fix(diagnosis, context, config) {
     result.stdout + '\n---STDERR---\n' + result.stderr,
     'utf8'
   );
+
+  // Log Copilot CLI output so it appears in the action logs
+  if (result.stdout) {
+    const maxLen = 8000;
+    const output = result.stdout.length > maxLen
+      ? result.stdout.substring(0, maxLen) + `\n... [truncated, ${result.stdout.length - maxLen} chars omitted — full output in heal-audit artifact]`
+      : result.stdout;
+    console.log(`[copilot-cli] --- Copilot CLI output ---\n${output}\n[copilot-cli] --- end output ---`);
+  }
 
   // Step 4: Clean up staged files
   cleanupStagedFiles(repoRoot, stagedFiles);
