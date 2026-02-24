@@ -332,6 +332,9 @@ function invokeCopilotCli(prompt, agentName, repoRoot) {
       || process.env.GITHUB_TOKEN
       || process.env.GH_PAT;
 
+    console.log(`[copilot-cli] Auth token found: ${token ? 'yes (' + token.substring(0, 8) + '...)' : 'NO'}`);
+    console.log(`[copilot-cli] Token sources: COPILOT_GITHUB_TOKEN=${process.env.COPILOT_GITHUB_TOKEN ? 'set' : 'unset'}, GH_TOKEN=${process.env.GH_TOKEN ? 'set' : 'unset'}, GITHUB_TOKEN=${process.env.GITHUB_TOKEN ? 'set' : 'unset'}`);
+
     if (token) {
       env.COPILOT_GITHUB_TOKEN = token;
       env.GH_TOKEN = token;
