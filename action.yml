@@ -111,11 +111,12 @@ runs:
         HEAL_ACTION_PATH: ${{ github.action_path }}
         GH_HOST: ${{ inputs.gh-host }}
       run: |
-        # Propagate copilot token: prefer explicit input, then inherit from caller env
+        # Propagate copilot token for AI backends (Copilot CLI / gh copilot).
+        # Do NOT overwrite GITHUB_TOKEN — it is used by git push and must stay
+        # as the Actions-provided token (which has contents:write permission).
         if [ -n "${{ inputs.copilot-token }}" ]; then
           export COPILOT_GITHUB_TOKEN="${{ inputs.copilot-token }}"
           export GH_TOKEN="${{ inputs.copilot-token }}"
-          export GITHUB_TOKEN="${{ inputs.copilot-token }}"
         fi
         ENGINE="${{ github.action_path }}/engine/index.js"
 

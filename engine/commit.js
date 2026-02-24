@@ -110,12 +110,6 @@ function commit({ repoRoot, config, context, mode = 'push' }) {
   // Direct push
   try {
     const branch = context.branch || getCurrentBranch(repoRoot);
-    // Configure git credentials for push using PAT token
-    const token = context.ghPat || process.env.GH_PAT || process.env.GH_TOKEN || process.env.GITHUB_TOKEN;
-    if (token) {
-      const basicAuth = Buffer.from(`x-access-token:${token}`).toString('base64');
-      execFileSync('git', ['config', '--local', 'http.https://github.com/.extraheader', `AUTHORIZATION: basic ${basicAuth}`], { cwd: repoRoot, stdio: 'pipe' });
-    }
     execFileSync('git', ['push', 'origin', branch], { cwd: repoRoot, stdio: 'pipe' });
     return { success: true, mode: 'push', files: allowed, branch };
   } catch (err) {
@@ -130,10 +124,11 @@ function createPR(repoRoot, context, commitMsg, files) {
   const attempt = context.attempt || 1;
   const healBranch = `auto-heal/attempt-${attempt}-${Date.now()}`;
 
-  // Resolve token for push and PR operations
-  const token = context.ghPat || process.env.GH_PAT || process.env.GH_TOKEN || process.env.GITHUB_TOKEN;
+  // Use GITHUB_TOKEN for push and PR operations (has contents:write).
+  // Fall back through other token env vars if GITHUB_TOKEN is not set.
+  const token = process.env.GITHUB_TOKEN || process.env.GH_TOKEN || process.env.GH_PAT || context.ghPat;
 
-  // Build env with token for all git/gh operations
+  // Build env with token for gh CLI operations
   const gitEnv = {
     ...process.env,
     ...(token ? { GH_TOKEN: token } : {}),
@@ -143,24 +138,16 @@ function createPR(repoRoot, context, commitMsg, files) {
   try {
     execFileSync('git', ['checkout', '-b', healBranch], { cwd: repoRoot, stdio: 'pipe' });
 
-    // Configure git credentials for push using PAT token
-    if (token) {
-      console.log(`[commit] Setting git credentials with token (${token.substring(0, 8)}...)`);
-      const basicAuth = Buffer.from(`x-access-token:${token}`).toString('base64');
-      execFileSync('git', ['config', '--local', '--replace-all', 'http.https://github.com/.extraheader', `AUTHORIZATION: basic ${basicAuth}`], { cwd: repoRoot, stdio: 'pipe' });
-    } else {
-      console.log('[commit] No token found — relying on existing git credentials');
-    }
+    // Debug: log which token is being used for push
+    console.log(`[commit] Push token source: GITHUB_TOKEN=${process.env.GITHUB_TOKEN ? 'set(' + process.env.GITHUB_TOKEN.substring(0, 8) + '...)' : 'unset'}, GH_TOKEN=${process.env.GH_TOKEN ? 'set(' + process.env.GH_TOKEN.substring(0, 8) + '...)' : 'unset'}`);
 
-    // Debug: show remote URL and current extraheader status
+    // Rely on actions/checkout extraheader for push (do NOT overwrite it)
     try {
       const remoteUrl = execFileSync('git', ['remote', 'get-url', 'origin'], { cwd: repoRoot, encoding: 'utf8' }).trim();
       console.log(`[commit] Remote URL: ${remoteUrl}`);
-      const headerCheck = execFileSync('git', ['config', '--local', '--get', 'http.https://github.com/.extraheader'], { cwd: repoRoot, encoding: 'utf8' }).trim();
-      console.log(`[commit] http.extraheader is set: ${headerCheck ? 'yes' : 'no'} (length=${headerCheck.length})`);
     } catch { /* ignore */ }
 
-    execFileSync('git', ['push', 'origin', healBranch], { cwd: repoRoot, stdio: 'pipe', env: gitEnv });
+    execFileSync('git', ['push', 'origin', healBranch], { cwd: repoRoot, stdio: 'pipe' });
 
     const prTitle = `Auto-heal: fix ${context.diagnosisType || 'ci-failure'} (attempt ${attempt})`;
     const prBody = [
