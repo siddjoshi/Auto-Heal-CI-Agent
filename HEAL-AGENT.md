@@ -86,7 +86,7 @@ bash adapters/generic/heal.sh --log-file ci.log --commit-mode pr
 | Backend | Platform Requirement | How It Works |
 |---------|---------------------|--------------|
 | `copilot-agent` | GitHub only | Creates an Issue + assigns Copilot coding agent to generate a PR |
-| `copilot-cli` | Any (with Copilot license) | Invokes Copilot CLI binary to edit files directly |
+| `copilot-cli` | Any (with GitHub Copilot license) | Calls GitHub Models API to generate fixes, applies them locally |
 | `llm-api` | Any | Calls OpenAI, Anthropic, Azure OpenAI, or GitHub Models API |
 
 ### copilot-agent (GitHub-native)
@@ -97,9 +97,9 @@ Best for GitHub-hosted repos. Creates a detailed Issue with diagnosis and assign
 
 ### copilot-cli
 
-For CI environments where the Copilot CLI binary is available.
+Calls the GitHub Models API (`models.inference.ai.azure.com`) to generate code fixes. Dynamically discovers `.instructions.md`, `SKILL.md`, and `.agent.md` files in the repo for additional context.
 
-**Required:** `COPILOT_TOKEN` environment variable.
+**Required:** `GH_TOKEN` (PAT with `repo` scope and Copilot license).
 
 ### llm-api (fully platform-agnostic)
 
@@ -187,7 +187,7 @@ Ready-to-use templates for popular CI platforms:
 | GitHub Actions | Composite action | `adapters/github-actions/action.yml` |
 | GitHub Actions | Reusable workflow | `adapters/github-actions/heal-reusable.yml` |
 | Azure DevOps | Pipeline template | `adapters/azure-devops/heal-task.yml` |
-| GitLab CI | CI template | `adapters/gitlab-ci/.heal-ci.yml` |
+| GitLab CI | CI include template | `adapters/gitlab-ci/.heal-ci.yml` |
 | Generic (any) | Shell script | `adapters/generic/heal.sh` |
 
 ---

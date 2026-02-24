@@ -2,11 +2,14 @@
 
 ## System Overview
 
-The self-healing CI/CD pipeline is a multi-layered system that detects, diagnoses, and fixes CI failures automatically using GitHub Copilot CLI.
+The Auto-Heal CI Agent is a platform-agnostic, multi-layered system that detects, diagnoses, and fixes CI failures automatically using pluggable AI backends. It has two implementation paths:
+
+1. **Node.js Engine** (`engine/` + `handlers/` + `backends/`) — the primary, platform-agnostic implementation used by the GitHub Action
+2. **Shell Scripts** (`scripts/`) — a legacy alternative used by the reusable workflow and for environments where shell orchestration is preferred
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    GitHub Actions                            │
+│                    Any CI Platform                           │
 │                                                              │
 │  ┌──────────────┐   ┌──────────────┐   ┌──────────────────┐ │
 │  │ Build & Test  │──▶│  Auto-Heal   │──▶│    Fallback      │ │
@@ -14,7 +17,8 @@ The self-healing CI/CD pipeline is a multi-layered system that detects, diagnose
 │  └──────────────┘   └──────────────┘   └──────────────────┘ │
 │        │ fail              │                    │             │
 │        ▼                   ▼                    ▼             │
-│   Upload logs     Orchestrator + CLI     Create Issue        │
+│   Upload logs     Engine diagnoses +     Create Issue        │
+│                   AI backend fixes                           │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -27,81 +31,86 @@ Three sequential jobs with conditional execution:
 | Job | Trigger | Purpose |
 |-----|---------|---------|
 | `build-and-test` | Every push/PR | Runs lint, build, tests; uploads artifacts on failure |
-| `auto-heal` | Job 1 fails + kill switch off + attempts ≤ 3 | Invokes healing orchestrator |
+| `auto-heal` | Job 1 fails + kill switch off + attempts ≤ 3 | Invokes the heal-agent engine |
 | `fallback` | Job 2 fails + attempts ≥ 3 | Creates GitHub Issue for manual review |
 
-### 2. Orchestrator (`scripts/heal.sh`)
+### 2. Node.js Engine (`engine/`)
 
-The central engine that coordinates the entire healing process:
+The primary orchestration system — a pipeline of config → diagnose → fix → commit:
 
 ```
-                    heal.sh
+                  engine/index.js
                        │
          ┌─────────────┼──────────────┐
          ▼             ▼              ▼
-   safety-guard   handlers/*.sh   prompts/*.md
-         │             │              │
-         ▼             ▼              ▼
-   Pre-flight      Classify       Render prompt
-   checks          failure        template
-                       │              │
-                       └──────┬───────┘
-                              ▼
-                       Copilot CLI
-                       (auto-healer agent)
-                              │
-                              ▼
-                    validate-changes.sh
-                              │
-                              ▼
-                    Validation command
-                    (npm test, npm run lint)
-                              │
-                       ┌──────┴──────┐
-                       ▼             ▼
-                    Success       Failure
-                    (commit)      (retry)
+   engine/config.js  engine/diagnose.js  engine/fix.js
+         │             │                    │
+         ▼             ▼                    ▼
+   .heal-agent.yml  handlers/node/      backends/
+   + env vars       - lint.js           - copilot-agent.js
+   + defaults       - test.js           - copilot-cli.js
+                    - build.js          - llm-api.js
+                    - dependency.js
+                                            │
+                                            ▼
+                                      engine/commit.js
+                                      (stage → validate → push/PR)
 ```
 
-**Execution flow:**
+| Module | Purpose |
+|--------|---------|
+| `engine/index.js` | CLI entry point. Parses args, loads config, runs diagnose → fix → commit pipeline |
+| `engine/config.js` | Loads `.heal-agent.yml`, applies defaults, merges env var overrides |
+| `engine/diagnose.js` | Runs handler chain sequentially — first match wins |
+| `engine/fix.js` | Backend factory — selects AI backend by name, delegates fix generation |
+| `engine/commit.js` | Git operations: detects changes, reverts protected paths, stages allowed files, commits/pushes or opens PR |
 
-1. **Pre-flight** — `safety-guard.sh` checks kill switch, attempt limits, environment
-2. **Classify** — Iterates through `handlers/` until one matches the failure
-3. **Render** — Substitutes `{{VARIABLES}}` in prompt template with diagnosis data
-4. **Invoke** — Calls `copilot -p <prompt> --agent=auto-healer --allow-all-tools`
-5. **Sandbox** — `validate-changes.sh` reverts any modifications to protected files
-6. **Validate** — Runs the appropriate validation command (e.g., `npm test`)
-7. **Commit** — Stages only `src/` and `tests/`, commits, and pushes
+### 3. Handler Plugin System (`handlers/node/`)
 
-### 3. Handler Plugin System (`scripts/handlers/`)
+Node.js handlers classify CI failures by parsing structured output and log files:
 
-Handlers are shell scripts that classify CI failures by parsing log files and test output:
+| Handler | Source File | Detects | Parses |
+|---------|------------|---------|--------|
+| `lint` | `handlers/node/lint.js` | ESLint violations | `lint-output.json` (ESLint JSON format) |
+| `test` | `handlers/node/test.js` | Jest test failures | `test-results.json` (Jest JSON format) |
+| `build` | `handlers/node/build.js` | Syntax/module/reference errors | CI log file via regex |
+| `dependency` | `handlers/node/dependency.js` | npm install/audit failures | CI log file via regex |
 
+**Execution order** (defined in `handlers/node/index.js`): lint → test → build → dependency. First match wins.
+
+Each handler returns a diagnosis object:
+
+```json
+{
+  "type": "lint-violation|test-failure|build-error|dependency-error",
+  "handler": "lint|test|build|dependency",
+  "healable": true,
+  "failures": [
+    {
+      "file": "src/app.js",
+      "line": 4,
+      "rule": "no-var",
+      "message": "Unexpected var, use let or const instead."
+    }
+  ],
+  "relevantFiles": ["src/app.js"],
+  "validationCommand": "npm run lint"
+}
 ```
-Handler Contract:
-  Input:  $1 = path to CI log file
-  Output: JSON to stdout with structure:
-          {
-            "type": "test-failure|lint-failure|build-failure|dependency-failure",
-            "healable": true|false,
-            "failures": [...],
-            "relevantFiles": [...],
-            "validationCommand": "npm test"
-          }
-  Exit:   0 = handler matched this failure
-          1 = not this handler's domain (skip)
-```
 
-| Handler | Detects | Parses |
-|---------|---------|--------|
-| `test-handler.sh` | Jest test failures | `test-results.json` |
-| `lint-handler.sh` | ESLint violations | `lint-output.json` |
-| `build-handler.sh` | Syntax/module errors | CI log text patterns |
-| `dependency-handler.sh` | npm install/audit issues | CI log text patterns |
+**Shell handlers** (`scripts/handlers/`) mirror the Node.js handlers as shell scripts with embedded Node one-liners for JSON parsing. They are used by the legacy shell orchestrator (`scripts/heal.sh`). Any file matching `*-handler.sh` is auto-discovered.
 
-Handlers are auto-discovered — any file matching `*-handler.sh` in the handlers directory is executed.
+### 4. AI Backends (`backends/`)
 
-### 4. Copilot Agent Stack
+Three pluggable backends handle AI-powered fix generation:
+
+| Backend | File | Mechanism |
+|---------|------|-----------|
+| `copilot-agent` | `backends/copilot-agent.js` | Creates a GitHub Issue with structured diagnosis context and assigns the Copilot coding agent via GraphQL. Copilot autonomously creates a PR with the fix. |
+| `copilot-cli` | `backends/copilot-cli.js` | Dynamically discovers `.github/agents/*.md`, `.github/skills/*/SKILL.md`, and `.github/instructions/*.md` from both repos. Builds a system prompt, calls the GitHub Models API, and parses JSON file-edit responses. |
+| `llm-api` | `backends/llm-api.js` | Calls OpenAI, Anthropic, Azure OpenAI, or GitHub Models API directly. Parses code-block patches from the response and applies them within allowed paths. |
+
+### 5. Copilot Agent Context Stack
 
 Layered instruction system that gives Copilot maximum context:
 
@@ -116,21 +125,33 @@ Layered instruction system that gives Copilot maximum context:
 │  .github/instructions/src.instructions  │  Path-specific guidance
 │  .github/instructions/tests.instructions│
 ├─────────────────────────────────────────┤
-│  scripts/prompts/heal-prompt.md         │  Runtime prompt template
+│  prompts/heal-prompt.md                 │  Runtime prompt template
 └─────────────────────────────────────────┘
 ```
 
-### 5. Safety Layer
+### 6. CI Platform Adapters (`adapters/`)
+
+| Platform | Adapter | Status |
+|----------|---------|--------|
+| GitHub Actions | `adapters/github-actions/action.yml` — Composite action | Ready |
+| GitHub Actions | `adapters/github-actions/heal-reusable.yml` — Reusable workflow | Ready |
+| Azure DevOps | `adapters/azure-devops/heal-task.yml` — Pipeline template | Ready |
+| Generic (any CI) | `adapters/generic/heal.sh` — Shell script | Ready |
+| GitLab CI | `adapters/gitlab-ci/` — Placeholder | Not yet implemented |
+
+### 7. Safety Layer
 
 ```
 Pre-heal:                       Post-heal:
 ┌─────────────────────┐         ┌──────────────────────┐
-│ safety-guard.sh     │         │ validate-changes.sh  │
-│ ├─ Kill switch      │         │ ├─ Protected paths   │
-│ ├─ Attempt counter  │         │ ├─ Auto-revert       │
-│ ├─ GH_TOKEN check   │         │ └─ Allowed paths     │
-│ └─ Git state check  │         │     (src/, tests/)   │
-└─────────────────────┘         └──────────────────────┘
+│ engine/commit.js     │         │ engine/commit.js     │
+│ safety-guard.sh      │         │ validate-changes.sh  │
+│ ├─ Kill switch       │         │ ├─ Protected paths   │
+│ ├─ Attempt counter   │         │ │   (.github/, etc.) │
+│ ├─ GH_TOKEN check    │         │ ├─ Auto-revert       │
+│ └─ Git state check   │         │ └─ Allowed paths     │
+└─────────────────────┘         │     (src/, tests/)   │
+                                └──────────────────────┘
 ```
 
 ## Data Flow
@@ -139,34 +160,32 @@ Pre-heal:                       Post-heal:
 CI Failure
     │
     ├── ci-output.log         (raw CI output)
-    ├── test-results.json     (Jest JSON report)
-    ├── lint-output.json      (ESLint JSON report)
+    ├── test-results.json     (Jest JSON report, if available)
+    ├── lint-output.json      (ESLint JSON report, if available)
     │
-    ▼ Handler classifies
+    ▼ Handler chain classifies (engine/diagnose.js)
     │
     ├── Diagnosis JSON        (structured failure data)
     │
-    ▼ Template rendered
+    ▼ AI backend generates fix (engine/fix.js → backends/)
     │
-    ├── Copilot prompt        (complete context for AI)
+    ├── Modified files        (in src/ or tests/ only)
     │
-    ▼ Copilot CLI runs
+    ▼ Changes validated (engine/commit.js)
     │
-    ├── Modified files        (in src/ or tests/)
-    │
-    ▼ Changes validated
+    ├── Protected files reverted
+    ├── Only allowed paths staged
     │
     ├── .heal-audit/          (attempt logs)
-    │   ├── attempt-1.json
-    │   ├── copilot-output-1.log
-    │   └── validation-1.log
+    │   ├── attempt-1.json    (diagnosis + result)
+    │   └── llm-response-1.txt (raw AI output)
     │
-    └── Git commit + push     (triggers next CI run)
+    └── Git commit + push / PR (triggers next CI run)
 ```
 
 ## Reusable Workflow
 
-`heal-reusable.yml` enables cross-repository adoption:
+`.github/workflows/heal-reusable.yml` enables cross-repository adoption:
 
 ```yaml
 # In any other repo's workflow:
@@ -174,20 +193,26 @@ jobs:
   heal:
     uses: your-org/Auto-heal-CI-Agent/.github/workflows/heal-reusable.yml@main
     with:
+      test-command: 'npm test'
+      lint-command: 'npm run lint'
+      build-command: 'npm run build'
+      node-version: '20'
       max-attempts: 3
-      fix-delivery: pr
-      copilot-model: claude-sonnet-4-5
     secrets:
       copilot-token: ${{ secrets.COPILOT_TOKEN }}
 ```
+
+> **Note:** The reusable workflow uses the legacy shell orchestrator (`scripts/heal.sh`), not the Node.js engine. The composite action (`action.yml`) uses the Node.js engine.
 
 ## Key Design Decisions
 
 | Decision | Rationale |
 |----------|-----------|
-| Plugin-based handlers | New failure types added by dropping a script into `handlers/` |
+| Dual implementation (Node.js engine + shell scripts) | Node.js engine for structured, multi-backend use; shell scripts for lightweight, Copilot CLI-only environments |
+| Plugin-based handlers | New failure types added by dropping a module into `handlers/<language>/` |
+| Pluggable AI backends | Choose between Copilot coding agent, Copilot CLI, or direct LLM API based on CI platform and preferences |
 | Template-based prompts | Prompts can be tuned independently of orchestrator logic |
-| File sandboxing | Copilot can only modify source/test files, never infra |
+| File sandboxing | AI can only modify source/test files, never infrastructure |
 | Audit trail | Every attempt is logged for debugging and compliance |
-| Attempt counter via file | Works across workflow re-runs without external state |
-| Agent instructions layering | Copilot gets project context + domain expertise + path rules |
+| Attempt counter | Prevents infinite heal loops |
+| Agent instructions layering | AI gets project context + domain expertise + path-specific rules |

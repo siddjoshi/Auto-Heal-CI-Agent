@@ -1,6 +1,6 @@
 # Setup Guide
 
-Step-by-step instructions to get the self-healing CI/CD pipeline running in your repository.
+Step-by-step instructions to integrate the Auto-Heal CI Agent into your repository.
 
 ---
 
@@ -8,199 +8,280 @@ Step-by-step instructions to get the self-healing CI/CD pipeline running in your
 
 | Requirement | Minimum Version | Purpose |
 |------------|----------------|---------|
-| Node.js | 20+ | Runtime for the sample app and Jest |
+| Node.js | 20+ | Runtime for the application and tests |
 | npm | 10+ | Package management |
 | Git | 2.30+ | Version control |
 | GitHub repo | — | Hosts Actions workflow |
-| GitHub Copilot license | Individual or Business | Powers the CLI |
-| Copilot CLI | Latest | AI-driven code fixes |
+
+### Backend-specific requirements
+
+| Backend | Additional Requirement |
+|---------|----------------------|
+| `copilot-agent` | GitHub Copilot license (for the Copilot coding agent) + `GH_PAT` with `repo` scope |
+| `copilot-cli` | GitHub Models API access + `GH_PAT` with `repo` scope |
+| `llm-api` | API key for your chosen provider (OpenAI, Anthropic, Azure OpenAI, or GitHub Models) |
 
 ---
 
-## Step 1: Create the Repository
+## Step 1: Add the GitHub Action to Your Workflow
 
-```bash
-# Option A: Clone this repo
-git clone https://github.com/<your-org>/Auto-heal-CI-Agent.git
-cd Auto-heal-CI-Agent
+Create or update `.github/workflows/ci.yml` in your repository:
 
-# Option B: Use as a template
-# Click "Use this template" on GitHub, then clone your new repo
+```yaml
+name: CI Pipeline
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm ci
+      - run: npm run lint -- -f json -o lint-output.json || true
+      - run: npm test -- --json --outputFile=test-results.json || true
+      - run: npm run build 2>&1 | tee ci-output.log
+      
+      # Upload artifacts on failure for the heal job
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-output
+          path: |
+            ci-output.log
+            lint-output.json
+            test-results.json
+
+  auto-heal:
+    needs: build-and-test
+    if: |
+      failure() &&
+      vars.ENABLE_SELF_HEAL != 'false' &&
+      github.run_attempt <= 3
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: ci-output
+      - uses: your-org/Auto-heal-CI-Agent@main
+        with:
+          backend: copilot-agent       # or copilot-cli or llm-api
+          language: node
+          log-file: ci-output.log
+          commit-mode: pr              # or push or none
+          max-attempts: 3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_PAT: ${{ secrets.GH_PAT }}
+
+  fallback:
+    needs: auto-heal
+    if: failure() && github.run_attempt >= 3
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: '🔴 Auto-heal failed after 3 attempts',
+              body: `CI run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+              labels: ['auto-heal-failed']
+            });
 ```
 
 ---
 
-## Step 2: Install Dependencies
+## Step 2: Configure Secrets and Variables
 
-```bash
-npm install
-```
-
-Verify the app works locally:
-
-```bash
-npm start          # Server runs on port 3000
-npm test           # Tests run (some will fail — deliberate)
-npm run lint       # Lint runs (violations expected)
-```
-
----
-
-## Step 3: Create a GitHub Personal Access Token (PAT)
-
-1. Go to **GitHub → Settings → Developer settings → Personal access tokens → Fine-grained tokens**
-2. Click **Generate new token**
-3. Configure:
-   - **Token name:** `copilot-self-heal`
-   - **Expiration:** 90 days (recommended)
-   - **Repository access:** Select your repo
-   - **Permissions:**
-     - **Contents:** Read and write
-     - **Pull requests:** Read and write (if using PR mode)
-     - **Issues:** Read and write (for fallback issue creation)
-   - **Account permissions:**
-     - **Copilot:** Read (enables Copilot CLI authentication)
-4. Click **Generate token** and copy the value
-
----
-
-## Step 4: Configure Repository Secrets & Variables
-
-Go to your repo → **Settings → Secrets and variables → Actions**
+Go to your repo → **Settings → Secrets and variables → Actions**.
 
 ### Secrets
 
-| Name | Value |
-|------|-------|
-| `COPILOT_TOKEN` | The PAT from Step 3 |
+| Name | Required For | Value |
+|------|-------------|-------|
+| `GH_PAT` | `copilot-agent`, `copilot-cli` | GitHub PAT with `repo` scope |
+| `OPENAI_API_KEY` | `llm-api` (OpenAI) | Your OpenAI API key |
+| `ANTHROPIC_API_KEY` | `llm-api` (Anthropic) | Your Anthropic API key |
+| `AZURE_OPENAI_API_KEY` | `llm-api` (Azure OpenAI) | Your Azure OpenAI key |
+
+> **Note:** You only need the secret(s) for the backend you choose to use.
 
 ### Variables
 
-| Name | Value | Purpose |
-|------|-------|---------|
-| `ENABLE_SELF_HEAL` | `true` | Set to `false` to disable healing (kill switch) |
+| Name | Default | Purpose |
+|------|---------|---------|
+| `ENABLE_SELF_HEAL` | `true` | Kill switch — set to `false` to disable healing |
 
 ---
 
-## Step 5: Verify Workflow Permissions
+## Step 3: Configure Workflow Permissions
 
 Go to **Settings → Actions → General → Workflow permissions**:
 
 - Select **Read and write permissions**
-- Check **Allow GitHub Actions to create and approve pull requests**
+- Check **Allow GitHub Actions to create and approve pull requests** (if using `commit-mode: pr`)
 
 ---
 
-## Step 6: Push and Trigger
+## Step 4: Create the PAT (for `copilot-agent` or `copilot-cli`)
+
+1. Go to **GitHub → Settings → Developer settings → Personal access tokens → Fine-grained tokens**
+2. Click **Generate new token**
+3. Configure:
+   - **Token name:** `auto-heal-ci`
+   - **Expiration:** 90 days (recommended)
+   - **Repository access:** Select your repo(s)
+   - **Permissions:**
+     - **Contents:** Read and write
+     - **Pull requests:** Read and write
+     - **Issues:** Read and write
+4. Click **Generate token** and save as `GH_PAT` in your repo secrets
+
+---
+
+## Step 5: Push and Watch It Work
 
 ```bash
 git add -A
-git commit -m "Initial commit with self-healing pipeline"
+git commit -m "Add self-healing CI pipeline"
 git push origin main
 ```
 
-### What happens next:
+### What happens:
 
-1. **Job 1 (Build & Test)** runs and **fails** — deliberate bugs are in the code
+1. **Job 1 (Build & Test)** runs — if it fails, it uploads artifacts
 2. **Job 2 (Auto-Heal)** activates:
-   - Downloads failure artifacts
-   - Installs Copilot CLI
-   - Runs `scripts/heal.sh` which classifies the failure and invokes Copilot
-   - Copilot reads the error context and applies a fix
-   - Fix is validated, committed, and pushed
-3. **CI re-triggers** automatically from the push
-4. If all bugs are fixed, pipeline goes green
-5. If not, it retries (up to 3 attempts total)
-6. **Job 3 (Fallback)** creates a GitHub Issue if all attempts fail
+   - Downloads the failure artifacts (logs, lint output, test results)
+   - Runs the heal-agent engine: diagnose → fix → commit
+   - Depending on the backend:
+     - `copilot-agent`: Creates an issue and assigns the Copilot coding agent to generate a PR
+     - `copilot-cli`: Calls GitHub Models API with full project context, applies file edits
+     - `llm-api`: Calls your chosen LLM provider, parses and applies patches
+   - Fix is committed via push or PR (based on `commit-mode`)
+3. **CI re-triggers** automatically
+4. Retries up to `max-attempts` times
+5. **Job 3 (Fallback)** creates a GitHub Issue if all attempts fail
 
 ---
 
-## Step 7: Monitor
+## Backend Configuration Examples
 
-### In GitHub Actions
+### Using `copilot-agent`
 
-- Watch the workflow run in the **Actions** tab
-- Each heal attempt uploads an artifact: `heal-audit-attempt-N`
+```yaml
+- uses: your-org/Auto-heal-CI-Agent@main
+  with:
+    backend: copilot-agent
+    language: node
+    log-file: ci-output.log
+    commit-mode: none    # copilot-agent creates its own PR
+  env:
+    GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    GH_PAT: ${{ secrets.GH_PAT }}
+```
 
-### Audit Artifacts
+### Using `copilot-cli`
 
-Download the `heal-audit-attempt-*` artifacts to see:
+```yaml
+- uses: your-org/Auto-heal-CI-Agent@main
+  with:
+    backend: copilot-cli
+    language: node
+    log-file: ci-output.log
+    commit-mode: pr
+    copilot-cli-model: gpt-4o    # optional, default: gpt-4o
+  env:
+    GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    GH_PAT: ${{ secrets.GH_PAT }}
+```
+
+### Using `llm-api` with OpenAI
+
+```yaml
+- uses: your-org/Auto-heal-CI-Agent@main
+  with:
+    backend: llm-api
+    language: node
+    log-file: ci-output.log
+    commit-mode: push
+    llm-provider: openai
+    llm-model: gpt-4o
+  env:
+    GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+```
+
+---
+
+## Action Inputs Reference
+
+| Input | Required | Default | Description |
+|-------|----------|---------|-------------|
+| `backend` | No | `copilot-agent` | AI backend: `copilot-agent`, `copilot-cli`, or `llm-api` |
+| `language` | No | `node` | Project language (determines which handler set to use) |
+| `log-file` | No | `ci-output.log` | Path to the CI output log file |
+| `commit-mode` | No | `push` | How to deliver fixes: `push`, `pr`, or `none` |
+| `attempt` | No | `${{ github.run_attempt }}` | Current attempt number |
+| `max-attempts` | No | `3` | Maximum heal attempts before giving up |
+| `dry-run` | No | `false` | If `true`, diagnose only — don't apply fixes |
+| `llm-provider` | No | `github` | LLM provider for `llm-api` backend: `openai`, `anthropic`, `azure-openai`, `github` |
+| `copilot-cli-model` | No | — | Model for `copilot-cli` backend |
+| `llm-model` | No | — | Model for `llm-api` backend |
+
+---
+
+## Monitoring & Audit
+
+### GitHub Actions tab
+
+Watch the workflow in **Actions**. Each heal attempt uploads an artifact: `heal-audit-attempt-N`.
+
+### Audit artifacts
 
 | File | Contents |
 |------|----------|
 | `attempt-N.json` | Failure diagnosis, type, timestamp, result |
-| `copilot-output-N.log` | Full Copilot CLI output |
-| `validation-N.log` | Validation command output |
-
----
-
-## Configuration Options
-
-### Changing Max Retry Attempts
-
-In `.github/workflows/ci.yml`, change the `--max-attempts` flag:
-
-```yaml
-bash scripts/heal.sh --max-attempts 5
-```
-
-And update the job condition:
-
-```yaml
-github.run_attempt <= 5
-```
-
-### Using PR Mode Instead of Direct Push
-
-Change `--mode direct` to `--mode pr`:
-
-```yaml
-bash scripts/heal.sh --mode pr
-```
-
-This creates a pull request instead of pushing directly to the branch.
-
-### Using the Reusable Workflow
-
-In another repository, call the reusable workflow:
-
-```yaml
-jobs:
-  ci:
-    # ... your build/test job
-  
-  heal:
-    needs: ci
-    if: needs.ci.result == 'failure'
-    uses: your-org/Auto-heal-CI-Agent/.github/workflows/heal-reusable.yml@main
-    with:
-      max-attempts: 3
-      fix-delivery: pr
-    secrets:
-      copilot-token: ${{ secrets.COPILOT_TOKEN }}
-```
+| `llm-response-N.txt` | Raw AI output |
 
 ---
 
 ## Troubleshooting
 
-### Copilot CLI authentication fails
+### Auto-heal doesn't trigger
 
-- Verify `COPILOT_TOKEN` secret is set correctly
-- Ensure the PAT has **Copilot** account permission
-- Check token hasn't expired
+- Verify `ENABLE_SELF_HEAL` is not set to `false`
+- Ensure the build-and-test job actually **fails** (not just warnings)
+- Check workflow permissions allow read/write
+- Verify `github.run_attempt` hasn't exceeded `max-attempts`
 
-### Pipeline doesn't auto-heal
+### Backend authentication fails
 
-- Check `ENABLE_SELF_HEAL` variable is set to `true` (not `false`)
-- Verify workflow permissions allow read/write
-- Check attempt count hasn't exceeded max in `.heal-attempt-count`
+- **copilot-agent / copilot-cli:** Verify `GH_PAT` is set and has `repo` scope
+- **llm-api:** Verify the correct API key secret is set for your provider
+- Check that tokens haven't expired
 
 ### Changes are not committed
 
 - Ensure workflow has `contents: write` permission
-- Check `validate-changes.sh` output — protected files may have been reverted
-- Copilot may not have made any edits (check `copilot-output-*.log`)
+- If using `commit-mode: pr`, ensure pull-requests permission is granted
+- Check that the AI made changes to allowed paths only (`src/`, `tests/`)
+- Protected files (`.github/`, config files) are automatically reverted
 
 ### Kill switch
 
