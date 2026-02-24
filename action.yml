@@ -48,6 +48,10 @@ inputs:
   copilot-token:
     description: 'GitHub token with Copilot access (Fine-Grained PAT). Falls back to GH_TOKEN / GITHUB_TOKEN.'
     required: false
+  github-token:
+    description: 'GitHub token for push/PR operations. Defaults to the Actions-provided GITHUB_TOKEN.'
+    required: false
+    default: ${{ github.token }}
   gh-host:
     description: 'GHES hostname (e.g. github.mycompany.com). Auto-detected from GITHUB_SERVER_URL if not set.'
     required: false
@@ -110,10 +114,10 @@ runs:
         HEAL_LLM_MODEL: ${{ inputs.llm-model }}
         HEAL_ACTION_PATH: ${{ github.action_path }}
         GH_HOST: ${{ inputs.gh-host }}
+        GITHUB_TOKEN: ${{ inputs.github-token }}
       run: |
         # Propagate copilot token for AI backends (Copilot CLI / gh copilot).
-        # Do NOT overwrite GITHUB_TOKEN — it is used by git push and must stay
-        # as the Actions-provided token (which has contents:write permission).
+        # GITHUB_TOKEN is set via env block above for push/PR operations.
         if [ -n "${{ inputs.copilot-token }}" ]; then
           export COPILOT_GITHUB_TOKEN="${{ inputs.copilot-token }}"
           export GH_TOKEN="${{ inputs.copilot-token }}"
