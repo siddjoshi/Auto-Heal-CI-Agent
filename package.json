@@ -2,36 +2,28 @@
   "name": "heal-agent",
   "version": "2.0.0",
   "description": "Platform-agnostic self-healing CI/CD agent — diagnose and auto-fix pipeline failures using Copilot or LLM APIs",
-  "main": "src/server.js",
   "bin": {
     "heal-agent": "engine/index.js"
   },
   "scripts": {
-    "start": "node src/server.js",
-    "test": "jest --verbose",
-    "test:json": "jest --json --outputFile=test-results.json --verbose",
-    "lint": "eslint src/ tests/",
-    "lint:json": "eslint src/ tests/ --format json --output-file lint-output.json",
-    "build": "node -e \"require('./src/app'); console.log('Build check passed');\"",
     "heal": "node engine/index.js",
     "heal:diagnose": "node engine/index.js --dry-run",
     "heal:llm": "node engine/index.js --backend llm-api",
-    "heal:copilot": "node engine/index.js --backend copilot-agent"
+    "heal:copilot": "node engine/index.js --backend copilot-agent",
+    "heal:copilot-cli": "node engine/index.js --backend copilot-cli"
   },
-  "keywords": ["ci", "self-healing", "copilot", "automation", "ci-cd", "llm", "auto-fix", "devops"],
+  "keywords": [
+    "ci",
+    "self-healing",
+    "copilot",
+    "automation",
+    "ci-cd",
+    "llm",
+    "auto-fix",
+    "devops"
+  ],
   "license": "MIT",
   "dependencies": {
-    "express": "^4.21.0"
-  },
-  "devDependencies": {
-    "eslint": "^8.57.0",
-    "jest": "^29.7.0",
-    "supertest": "^6.3.4"
-  },
-  "jest": {
-    "testEnvironment": "node",
-    "verbose": true,
-    "collectCoverage": false,
-    "testMatch": ["**/tests/**/*.test.js"]
+    "js-yaml": "4.1.1"
   }
 }

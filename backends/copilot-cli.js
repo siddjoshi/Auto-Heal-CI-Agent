@@ -2,25 +2,23 @@
 
 const fs = require('fs');
 const path = require('path');
-const https = require('https');
+const { execFile, execFileSync } = require('child_process');
 
 /**
  * Copilot CLI backend.
  *
- * Calls the GitHub Models API to generate code fixes, then applies
- * them directly to files on disk. The engine commit step creates a PR.
+ * Invokes the GitHub Copilot CLI binary (@github/copilot) to diagnose and fix
+ * CI failures. The binary edits files directly on disk.
  *
- * Dynamically discovers agent personas, skills, and coding instructions
- * from `.github/` directories in both the action repo (central) and the
- * consumer repo. Any future agents, skills, or instructions added to
- * either repo are automatically picked up — no code changes required.
+ * Central agents, skills, and instructions are staged into the consumer repo's
+ * .github/ directory at runtime so the Copilot CLI binary discovers them.
+ * Consumer-local files take priority (never overwritten).
  *
- * Requires: GH_TOKEN with Copilot license (for GitHub Models access).
+ * Requires: Fine-Grained PAT with Copilot access via COPILOT_GITHUB_TOKEN,
+ * GH_TOKEN, or GITHUB_TOKEN environment variables.
  */
 
-const MODELS_API_HOST = 'models.inference.ai.azure.com';
-const DEFAULT_MODEL = 'gpt-4o';
-const ACTION_ROOT = path.join(__dirname, '..');
+const ACTION_ROOT = process.env.HEAL_ACTION_PATH || path.join(__dirname, '..');
 
 /* ------------------------------------------------------------------ */
 /*  Utility helpers                                                    */
@@ -55,7 +53,6 @@ function parseFrontmatter(text) {
 
 /**
  * Simple glob matcher supporting `dir/**` and `**` patterns.
- * Returns true if filePath matches the glob.
  */
 function matchesGlob(filePath, pattern) {
   const normalized = filePath.replace(/\\/g, '/');
@@ -174,101 +171,201 @@ function discoverInstructions(rootDir, relevantFilePaths) {
 }
 
 /* ------------------------------------------------------------------ */
-/*  System prompt builder                                              */
+/*  Agent/skill staging for Copilot CLI discovery                      */
 /* ------------------------------------------------------------------ */
 
 /**
- * Build the full system prompt by discovering agents, skills, and
- * instructions from both the action repo and the consumer repo.
+ * Stage central agents, skills, and instructions into the consumer repo's
+ * .github/ directory so the Copilot CLI binary can discover them at runtime.
+ *
+ * Consumer-local files take priority (never overwritten).
+ * Returns list of staged file paths for cleanup.
  */
-function buildSystemPrompt(repoRoot, relevantFilePaths) {
-  const sections = [];
+function stageAgentsForDiscovery(repoRoot) {
+  const stagedFiles = [];
 
-  // Discover from both roots (action repo = central, consumer repo = project)
-  const roots = [
-    { label: 'central', dir: ACTION_ROOT },
-    { label: 'project', dir: repoRoot },
-  ];
+  // Stage central agents (consumer-local takes priority)
+  const centralAgentsDir = path.join(ACTION_ROOT, '.github', 'agents');
+  if (fs.existsSync(centralAgentsDir)) {
+    const consumerAgentsDir = path.join(repoRoot, '.github', 'agents');
+    fs.mkdirSync(consumerAgentsDir, { recursive: true });
 
-  // De-duplicate when action root and consumer root are the same path
-  const uniqueRoots = [];
-  const seen = new Set();
-  for (const root of roots) {
-    const resolved = path.resolve(root.dir);
-    if (!seen.has(resolved)) {
-      seen.add(resolved);
-      uniqueRoots.push(root);
+    for (const file of fs.readdirSync(centralAgentsDir)) {
+      if (!file.endsWith('.md')) continue;
+      const targetPath = path.join(consumerAgentsDir, file);
+      if (!fs.existsSync(targetPath)) {
+        fs.copyFileSync(path.join(centralAgentsDir, file), targetPath);
+        stagedFiles.push(targetPath);
+        console.log(`[copilot-cli] Staged central agent: ${path.basename(file, '.md')}`);
+      } else {
+        console.log(`[copilot-cli] Consumer has local agent: ${path.basename(file, '.md')} (using local)`);
+      }
     }
   }
 
-  const allAgents = [];
-  const allSkills = [];
-  const allInstructions = [];
+  // Stage central skills
+  const centralSkillsDir = path.join(ACTION_ROOT, '.github', 'skills');
+  if (fs.existsSync(centralSkillsDir)) {
+    for (const entry of fs.readdirSync(centralSkillsDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const sourceSkill = path.join(centralSkillsDir, entry.name, 'SKILL.md');
+      if (!fs.existsSync(sourceSkill)) continue;
 
-  for (const root of uniqueRoots) {
-    const agents = discoverAgents(root.dir);
-    for (const agent of agents) {
-      allAgents.push({ ...agent, source: root.label });
-    }
-
-    const skills = discoverSkills(root.dir);
-    for (const skill of skills) {
-      allSkills.push({ ...skill, source: root.label });
-    }
-
-    const instructions = discoverInstructions(root.dir, relevantFilePaths);
-    for (const instr of instructions) {
-      allInstructions.push({ ...instr, source: root.label });
+      const targetDir = path.join(repoRoot, '.github', 'skills', entry.name);
+      const targetPath = path.join(targetDir, 'SKILL.md');
+      if (!fs.existsSync(targetPath)) {
+        fs.mkdirSync(targetDir, { recursive: true });
+        fs.copyFileSync(sourceSkill, targetPath);
+        stagedFiles.push(targetPath);
+        console.log(`[copilot-cli] Staged central skill: ${entry.name}`);
+      }
     }
   }
 
-  // Log discovery results
-  console.log(`[copilot-cli] Agents loaded: ${allAgents.map((a) => `${a.name} (${a.source})`).join(', ') || 'none'}`);
-  console.log(`[copilot-cli] Skills loaded: ${allSkills.map((s) => `${s.name} (${s.source})`).join(', ') || 'none'}`);
-  console.log(`[copilot-cli] Instructions loaded: ${allInstructions.map((i) => `${i.name} (${i.source})`).join(', ') || 'none'}`);
-
-  // --- Agent Personas ---
-  if (allAgents.length > 0) {
-    sections.push('# Agent Personas\n');
-    for (const agent of allAgents) {
-      sections.push(`## ${agent.name}\n${agent.content}\n`);
+  // Stage central instructions
+  const centralInstrDir = path.join(ACTION_ROOT, '.github', 'instructions');
+  if (fs.existsSync(centralInstrDir)) {
+    const targetInstrDir = path.join(repoRoot, '.github', 'instructions');
+    fs.mkdirSync(targetInstrDir, { recursive: true });
+    for (const file of fs.readdirSync(centralInstrDir)) {
+      if (!file.endsWith('.md')) continue;
+      const targetPath = path.join(targetInstrDir, file);
+      if (!fs.existsSync(targetPath)) {
+        fs.copyFileSync(path.join(centralInstrDir, file), targetPath);
+        stagedFiles.push(targetPath);
+        console.log(`[copilot-cli] Staged central instruction: ${file}`);
+      }
     }
   }
 
-  // --- Skills ---
-  if (allSkills.length > 0) {
-    sections.push('# Skills\n');
-    for (const skill of allSkills) {
-      sections.push(`## ${skill.name}\n${skill.content}\n`);
+  // Stage central copilot-instructions.md (merge with consumer's if both exist)
+  const centralGlobal = path.join(ACTION_ROOT, '.github', 'copilot-instructions.md');
+  const consumerGlobal = path.join(repoRoot, '.github', 'copilot-instructions.md');
+  if (fs.existsSync(centralGlobal)) {
+    const centralContent = fs.readFileSync(centralGlobal, 'utf8');
+    if (fs.existsSync(consumerGlobal)) {
+      const consumerContent = fs.readFileSync(consumerGlobal, 'utf8');
+      if (!consumerContent.includes(centralContent.trim())) {
+        const backupPath = consumerGlobal + '.heal-backup';
+        fs.writeFileSync(backupPath, consumerContent, 'utf8');
+        stagedFiles.push(backupPath);
+        const merged = consumerContent + '\n\n---\n\n# Central Auto-Heal Instructions\n\n' + centralContent;
+        fs.writeFileSync(consumerGlobal, merged, 'utf8');
+        console.log('[copilot-cli] Merged central copilot-instructions.md with consumer');
+      }
+    } else {
+      fs.mkdirSync(path.join(repoRoot, '.github'), { recursive: true });
+      fs.copyFileSync(centralGlobal, consumerGlobal);
+      stagedFiles.push(consumerGlobal);
+      console.log('[copilot-cli] Staged central copilot-instructions.md');
     }
   }
 
-  // --- Coding Instructions ---
-  if (allInstructions.length > 0) {
-    sections.push('# Coding Instructions\n');
-    for (const instr of allInstructions) {
-      const scope = instr.applyTo ? ` (applies to: ${instr.applyTo})` : ' (global)';
-      sections.push(`## ${instr.name}${scope}\n${instr.content}\n`);
+  return stagedFiles;
+}
+
+/**
+ * Clean up staged files after Copilot CLI run.
+ */
+function cleanupStagedFiles(repoRoot, stagedFiles) {
+  for (const filePath of stagedFiles) {
+    if (filePath.endsWith('.heal-backup')) {
+      const originalPath = filePath.replace('.heal-backup', '');
+      try {
+        const backup = fs.readFileSync(filePath, 'utf8');
+        fs.writeFileSync(originalPath, backup, 'utf8');
+        fs.unlinkSync(filePath);
+      } catch { /* ignore cleanup errors */ }
+    } else {
+      try {
+        fs.unlinkSync(filePath);
+      } catch { /* already cleaned */ }
     }
   }
-
-  // --- Output Format (always appended) ---
-  sections.push([
-    '# Output Format\n',
-    'You MUST respond with ONLY a JSON array of file edits. No explanations outside the JSON.',
-    'Each edit is an object with "file" (relative path) and "content" (the complete updated file content).',
-    'Only include files that need changes. Write the COMPLETE file content, not a diff.',
-    'Example response:',
-    '```json',
-    '[{"file": "src/app.js", "content": "const express = require(\'express\');\\n..."}]',
-    '```',
-  ].join('\n'));
-
-  return sections.join('\n');
+  if (stagedFiles.length > 0) {
+    console.log(`[copilot-cli] Cleaned up ${stagedFiles.length} staged file(s)`);
+  }
 }
 
 /* ------------------------------------------------------------------ */
-/*  Prompt rendering & file reading                                    */
+/*  Copilot CLI binary invocation                                      */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Find the Copilot CLI binary. Tries `copilot` directly, falls back to npx.
+ * Returns { binary: string, useNpx: boolean }.
+ */
+function findCopilotBinary() {
+  try {
+    execFileSync('copilot', ['--version'], { stdio: 'pipe', encoding: 'utf8', timeout: 10000 });
+    return { binary: 'copilot', useNpx: false };
+  } catch { /* not found directly */ }
+
+  try {
+    execFileSync('npx', ['--yes', '@github/copilot', '--version'], { stdio: 'pipe', encoding: 'utf8', timeout: 30000 });
+    return { binary: 'npx', useNpx: true };
+  } catch { /* not found via npx */ }
+
+  throw new Error('Copilot CLI not found. Install with: npm install -g @github/copilot');
+}
+
+/**
+ * Invoke the Copilot CLI binary with the given prompt and agent.
+ *
+ * @param {string} prompt - The heal prompt text
+ * @param {string} agentName - Agent name (matches .github/agents/<name>.md)
+ * @param {string} repoRoot - Working directory for the copilot process
+ * @returns {Promise<{stdout: string, stderr: string}>}
+ */
+function invokeCopilotCli(prompt, agentName, repoRoot) {
+  return new Promise((resolve, reject) => {
+    const { binary, useNpx } = findCopilotBinary();
+
+    const args = useNpx
+      ? ['--yes', '@github/copilot', '-p', prompt, `--agent=${agentName}`, '--allow-all-tools']
+      : ['-p', prompt, `--agent=${agentName}`, '--allow-all-tools'];
+
+    // Set up environment for auth
+    const env = { ...process.env };
+    const token = process.env.COPILOT_GITHUB_TOKEN
+      || process.env.GH_TOKEN
+      || process.env.GITHUB_TOKEN
+      || process.env.GH_PAT;
+
+    if (token) {
+      env.COPILOT_GITHUB_TOKEN = token;
+      env.GH_TOKEN = token;
+      env.GITHUB_TOKEN = token;
+    }
+
+    // GHES support
+    if (process.env.GH_HOST) {
+      env.GH_HOST = process.env.GH_HOST;
+    } else if (process.env.GITHUB_SERVER_URL && process.env.GITHUB_SERVER_URL !== 'https://github.com') {
+      env.GH_HOST = process.env.GITHUB_SERVER_URL.replace(/^https?:\/\//, '');
+    }
+
+    console.log(`[copilot-cli] Invoking: ${binary} -p <prompt> --agent=${agentName} --allow-all-tools`);
+
+    execFile(binary, args, {
+      cwd: repoRoot,
+      env,
+      maxBuffer: 10 * 1024 * 1024,
+      timeout: 300000, // 5 minute timeout
+    }, (err, stdout, stderr) => {
+      if (err) {
+        console.error(`[copilot-cli] Copilot CLI exited with code ${err.code || 'unknown'}`);
+        if (stderr) console.error(`[copilot-cli] stderr: ${stderr.substring(0, 2000)}`);
+        reject(new Error(`Copilot CLI failed (exit ${err.code}): ${stderr || err.message}`));
+        return;
+      }
+      resolve({ stdout: stdout || '', stderr: stderr || '' });
+    });
+  });
+}
+
+/* ------------------------------------------------------------------ */
+/*  Prompt building                                                    */
 /* ------------------------------------------------------------------ */
 
 /**
@@ -310,110 +407,30 @@ function readRelevantFiles(repoRoot, diagnosis) {
   return files;
 }
 
-/* ------------------------------------------------------------------ */
-/*  GitHub Models API                                                  */
-/* ------------------------------------------------------------------ */
-
 /**
- * Call the GitHub Models API (chat completions).
+ * Build the complete prompt for the Copilot CLI.
+ * Combines heal-prompt template + source files + path constraints.
  */
-function callModelsAPI(token, model, messages) {
-  return new Promise((resolve, reject) => {
-    const body = JSON.stringify({ model, messages, temperature: 0.2 });
+function buildCopilotPrompt(diagnosis, context, config) {
+  const basePrompt = renderPrompt(diagnosis, context, config);
+  const relevantFiles = readRelevantFiles(context.repoRoot, diagnosis);
 
-    const options = {
-      hostname: MODELS_API_HOST,
-      path: '/chat/completions',
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-        'Content-Length': Buffer.byteLength(body),
-      },
-    };
+  const parts = [basePrompt];
 
-    const req = https.request(options, (res) => {
-      let data = '';
-      res.on('data', (chunk) => { data += chunk; });
-      res.on('end', () => {
-        if (res.statusCode >= 400) {
-          reject(new Error(`Models API returned ${res.statusCode}: ${data}`));
-          return;
-        }
-        try {
-          resolve(JSON.parse(data));
-        } catch {
-          reject(new Error(`Failed to parse Models API response: ${data.substring(0, 500)}`));
-        }
-      });
-    });
-
-    req.on('error', reject);
-    req.setTimeout(120000, () => {
-      req.destroy();
-      reject(new Error('Models API request timed out after 120s'));
-    });
-    req.write(body);
-    req.end();
-  });
-}
-
-/* ------------------------------------------------------------------ */
-/*  Response parsing & application                                     */
-/* ------------------------------------------------------------------ */
-
-/**
- * Parse the model response to extract file edits.
- * Expects a JSON array: [{ "file": "path", "content": "full file content" }]
- */
-function parseEdits(responseText) {
-  // Extract JSON from markdown code fence if present
-  const jsonMatch = responseText.match(/```(?:json)?\s*\n?([\s\S]*?)\n?\s*```/);
-  const jsonStr = jsonMatch ? jsonMatch[1] : responseText;
-
-  const parsed = JSON.parse(jsonStr.trim());
-
-  if (!Array.isArray(parsed)) {
-    throw new Error('Expected a JSON array of file edits');
-  }
-
-  for (const edit of parsed) {
-    if (!edit.file || typeof edit.content !== 'string') {
-      throw new Error('Each edit must have "file" (string) and "content" (string)');
+  if (Object.keys(relevantFiles).length > 0) {
+    parts.push('\n## Source Files\n');
+    for (const [filePath, content] of Object.entries(relevantFiles)) {
+      parts.push(`### ${filePath}\n\`\`\`\n${content}\n\`\`\`\n`);
     }
   }
 
-  return parsed;
-}
-
-/**
- * Apply file edits to disk.
- */
-function applyEdits(repoRoot, edits) {
-  const applied = [];
-  for (const edit of edits) {
-    const absPath = path.join(repoRoot, edit.file);
-
-    // Safety: only allow files under allowed directories
-    const relPath = path.relative(repoRoot, absPath);
-    if (relPath.startsWith('..') || path.isAbsolute(relPath)) {
-      console.log(`[copilot-cli] Skipping file outside repo: ${edit.file}`);
-      continue;
-    }
-    if (relPath.startsWith('.github') || relPath.startsWith('scripts')) {
-      console.log(`[copilot-cli] Skipping protected path: ${edit.file}`);
-      continue;
-    }
-
-    const dir = path.dirname(absPath);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-    fs.writeFileSync(absPath, edit.content, 'utf8');
-    applied.push(edit.file);
-    console.log(`[copilot-cli] Updated: ${edit.file}`);
+  if (config.paths) {
+    parts.push('\n## File Constraints');
+    parts.push(`Only modify files under: ${config.paths.allowed.join(', ')}`);
+    parts.push(`Do NOT modify: ${config.paths.protected.join(', ')}`);
   }
-  return applied;
+
+  return parts.join('\n');
 }
 
 /* ------------------------------------------------------------------ */
@@ -421,77 +438,91 @@ function applyEdits(repoRoot, edits) {
 /* ------------------------------------------------------------------ */
 
 /**
- * Generate and apply a fix using the GitHub Models API.
+ * Generate and apply a fix using the GitHub Copilot CLI binary.
  */
 async function fix(diagnosis, context, config) {
   const { repoRoot } = context;
-  const ghToken = context.copilotToken || process.env.COPILOT_TOKEN || context.ghPat || process.env.GH_PAT || process.env.GH_TOKEN;
+  const agentName = config.copilot?.agentName || 'auto-healer';
 
-  if (!ghToken) {
-    throw new Error('GH_TOKEN, GH_PAT, or COPILOT_TOKEN is required for the copilot-cli backend.');
-  }
-
-  const model = process.env.HEAL_COPILOT_CLI_MODEL || process.env.HEAL_LLM_MODEL || config.llm?.model || DEFAULT_MODEL;
-  const healPrompt = renderPrompt(diagnosis, context, config);
-  const relevantFiles = readRelevantFiles(repoRoot, diagnosis);
-  const relevantFilePaths = Object.keys(relevantFiles);
-
-  // Build file context string
-  let fileContext = '';
-  for (const [filePath, content] of Object.entries(relevantFiles)) {
-    fileContext += `\n### ${filePath}\n\`\`\`\n${content}\n\`\`\`\n`;
-  }
-
-  // Build system prompt from discovered agents, skills, and instructions
-  const systemPrompt = buildSystemPrompt(repoRoot, relevantFilePaths);
-
-  const userPrompt = `${healPrompt}\n\n## Source Files\n${fileContext}`;
-
-  console.log(`[copilot-cli] Calling GitHub Models API (model: ${model})...`);
-  console.log(`[copilot-cli] Relevant files: ${relevantFilePaths.join(', ') || 'none'}`);
-
-  let response;
+  // Step 1: Stage central agents/skills/instructions for Copilot CLI discovery
+  console.log('[copilot-cli] Staging central agents/skills/instructions...');
+  let stagedFiles = [];
   try {
-    response = await callModelsAPI(ghToken, model, [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: userPrompt },
-    ]);
+    stagedFiles = stageAgentsForDiscovery(repoRoot);
   } catch (err) {
-    return { success: false, error: `Models API call failed: ${err.message}` };
+    console.error(`[copilot-cli] Warning: Failed to stage some central files: ${err.message}`);
   }
 
-  const responseText = response.choices?.[0]?.message?.content;
-  if (!responseText) {
-    return { success: false, error: 'Models API returned empty response' };
-  }
+  // Step 2: Build the prompt
+  const prompt = buildCopilotPrompt(diagnosis, context, config);
 
-  // Save raw response for audit
+  // Save prompt to audit
   const auditDir = path.join(repoRoot, '.heal-audit');
   if (!fs.existsSync(auditDir)) {
     fs.mkdirSync(auditDir, { recursive: true });
   }
   fs.writeFileSync(
-    path.join(auditDir, `copilot-cli-response-${context.attempt || 1}.json`),
-    JSON.stringify(response, null, 2),
+    path.join(auditDir, `copilot-cli-prompt-${context.attempt || 1}.md`),
+    prompt,
     'utf8'
   );
 
-  // Parse and apply edits
-  let edits;
+  // Step 3: Invoke Copilot CLI
+  console.log(`[copilot-cli] Invoking Copilot CLI (agent: ${agentName})...`);
+  let result;
   try {
-    edits = parseEdits(responseText);
+    result = await invokeCopilotCli(prompt, agentName, repoRoot);
   } catch (err) {
-    return { success: false, error: `Failed to parse model response: ${err.message}`, rawResponse: responseText };
+    cleanupStagedFiles(repoRoot, stagedFiles);
+    return { success: false, error: `Copilot CLI invocation failed: ${err.message}` };
   }
 
-  if (edits.length === 0) {
-    return { success: false, error: 'Model returned zero file edits' };
+  // Save output to audit
+  fs.writeFileSync(
+    path.join(auditDir, `copilot-cli-output-${context.attempt || 1}.log`),
+    result.stdout + '\n---STDERR---\n' + result.stderr,
+    'utf8'
+  );
+
+  // Step 4: Clean up staged files
+  cleanupStagedFiles(repoRoot, stagedFiles);
+
+  // Step 5: Detect changed files
+  let changedFiles = [];
+  try {
+    const diffOutput = execFileSync('git', ['diff', '--name-only'], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    changedFiles = diffOutput.trim().split('\n').filter(Boolean);
+  } catch { /* no changes */ }
+
+  // Also check for new untracked files in allowed paths
+  try {
+    const untrackedOutput = execFileSync('git', ['ls-files', '--others', '--exclude-standard'], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    const untracked = untrackedOutput.trim().split('\n').filter(Boolean);
+    const allowedUntracked = untracked.filter((f) =>
+      config.paths.allowed.some((prefix) => f.startsWith(prefix))
+    );
+    changedFiles = [...new Set([...changedFiles, ...allowedUntracked])];
+  } catch { /* ignore */ }
+
+  if (changedFiles.length === 0) {
+    return { success: false, error: 'Copilot CLI made no file changes' };
   }
 
-  const applied = applyEdits(repoRoot, edits);
-  console.log(`[copilot-cli] Applied ${applied.length} file edit(s)`);
+  console.log(`[copilot-cli] Copilot CLI modified ${changedFiles.length} file(s): ${changedFiles.join(', ')}`);
 
-  return { success: applied.length > 0, filesChanged: applied, model };
+  return {
+    success: true,
+    filesChanged: changedFiles,
+    copilotOutput: result.stdout.substring(0, 5000),
+  };
 }
 
 module.exports = { fix, name: 'copilot-cli' };

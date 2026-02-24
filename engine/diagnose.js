@@ -26,6 +26,8 @@ function loadHandlers(language) {
 /**
  * Run the handler chain to diagnose a CI failure.
  *
+ * Runs ALL handlers and aggregates results (not first-match-wins).
+ *
  * @param {object} options
  * @param {string} options.repoRoot - Absolute path to the repository root
  * @param {string} options.logFile  - Absolute path to the CI log file
@@ -36,15 +38,16 @@ function diagnose({ repoRoot, logFile, language = 'node' }) {
   const handlers = loadHandlers(language);
   const logPath = logFile ? path.resolve(repoRoot, logFile) : null;
 
+  const matches = [];
+
   for (const handler of handlers) {
     try {
       const result = handler.detect(repoRoot, logPath);
       if (result) {
-        return {
-          matched: true,
+        matches.push({
           handler: handler.name,
           ...result,
-        };
+        });
       }
     } catch (err) {
       // Handler threw — skip to next
@@ -52,16 +55,41 @@ function diagnose({ repoRoot, logFile, language = 'node' }) {
     }
   }
 
-  // No handler matched — return generic diagnosis
+  if (matches.length === 0) {
+    // No handler matched — return generic diagnosis
+    return {
+      matched: false,
+      handler: 'none',
+      type: 'unknown',
+      healable: true,
+      failureCount: 0,
+      failures: [],
+      relevantFiles: [],
+      validationCommand: 'npm test',
+    };
+  }
+
+  if (matches.length === 1) {
+    return { matched: true, ...matches[0] };
+  }
+
+  // Aggregate multiple matches
+  const types = matches.map((m) => m.type);
+  const allFailures = matches.flatMap((m) => m.failures || []);
+  const allFiles = [...new Set(matches.flatMap((m) => m.relevantFiles || []))];
+  const validationCommands = [...new Set(matches.map((m) => m.validationCommand))];
+  const compositeValidation = validationCommands.join(' && ');
+
   return {
-    matched: false,
-    handler: 'none',
-    type: 'unknown',
-    healable: true,
-    failureCount: 0,
-    failures: [],
-    relevantFiles: [],
-    validationCommand: 'npm test',
+    matched: true,
+    handler: matches.map((m) => m.handler).join('+'),
+    type: types.join('+'),
+    healable: matches.every((m) => m.healable),
+    failureCount: allFailures.length,
+    failures: allFailures,
+    relevantFiles: allFiles,
+    validationCommand: compositeValidation,
+    subDiagnoses: matches,
   };
 }
 

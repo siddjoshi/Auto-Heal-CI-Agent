@@ -1,7 +1,6 @@
 'use strict';
 
-const { execSync } = require('child_process');
-const path = require('path');
+const { execFileSync } = require('child_process');
 
 /**
  * Commit adapter — stages, commits, and pushes healed changes.
@@ -15,8 +14,8 @@ const path = require('path');
  */
 function getChangedFiles(repoRoot) {
   try {
-    const unstaged = execSync('git diff --name-only', { cwd: repoRoot, encoding: 'utf8' }).trim();
-    const staged = execSync('git diff --cached --name-only', { cwd: repoRoot, encoding: 'utf8' }).trim();
+    const unstaged = execFileSync('git', ['diff', '--name-only'], { cwd: repoRoot, encoding: 'utf8' }).trim();
+    const staged = execFileSync('git', ['diff', '--cached', '--name-only'], { cwd: repoRoot, encoding: 'utf8' }).trim();
     const all = `${unstaged}\n${staged}`.split('\n').filter(Boolean);
     return [...new Set(all)];
   } catch {
@@ -33,7 +32,7 @@ function revertProtected(repoRoot, changedFiles, protectedPaths) {
     const isProtected = protectedPaths.some((p) => file.startsWith(p) || file === p);
     if (isProtected) {
       try {
-        execSync(`git checkout -- "${file}"`, { cwd: repoRoot, stdio: 'pipe' });
+        execFileSync('git', ['checkout', '--', file], { cwd: repoRoot, stdio: 'pipe' });
         reverted.push(file);
       } catch {
         // Already clean or untracked
@@ -83,15 +82,15 @@ function commit({ repoRoot, config, context, mode = 'push' }) {
 
   // Stage allowed files
   for (const file of allowed) {
-    execSync(`git add "${file}"`, { cwd: repoRoot, stdio: 'pipe' });
+    execFileSync('git', ['add', file], { cwd: repoRoot, stdio: 'pipe' });
   }
 
   // Configure git identity if not already set
   try {
-    execSync('git config user.name', { cwd: repoRoot, stdio: 'pipe' });
+    execFileSync('git', ['config', 'user.name'], { cwd: repoRoot, stdio: 'pipe' });
   } catch {
-    execSync('git config user.name "auto-heal-bot"', { cwd: repoRoot, stdio: 'pipe' });
-    execSync('git config user.email "auto-heal-bot@users.noreply.github.com"', { cwd: repoRoot, stdio: 'pipe' });
+    execFileSync('git', ['config', 'user.name', 'auto-heal-bot'], { cwd: repoRoot, stdio: 'pipe' });
+    execFileSync('git', ['config', 'user.email', 'auto-heal-bot@users.noreply.github.com'], { cwd: repoRoot, stdio: 'pipe' });
   }
 
   const attempt = context.attempt || 1;
@@ -99,7 +98,7 @@ function commit({ repoRoot, config, context, mode = 'push' }) {
 
   // Commit
   try {
-    execSync(`git commit -m "${commitMsg}"`, { cwd: repoRoot, stdio: 'pipe' });
+    execFileSync('git', ['commit', '-m', commitMsg], { cwd: repoRoot, stdio: 'pipe' });
   } catch (err) {
     return { success: false, reason: `git commit failed: ${err.message}` };
   }
@@ -111,7 +110,7 @@ function commit({ repoRoot, config, context, mode = 'push' }) {
   // Direct push
   try {
     const branch = context.branch || getCurrentBranch(repoRoot);
-    execSync(`git push origin ${branch}`, { cwd: repoRoot, stdio: 'pipe' });
+    execFileSync('git', ['push', 'origin', branch], { cwd: repoRoot, stdio: 'pipe' });
     return { success: true, mode: 'push', files: allowed, branch };
   } catch (err) {
     return { success: false, reason: `git push failed: ${err.message}`, files: allowed };
@@ -126,8 +125,8 @@ function createPR(repoRoot, context, commitMsg, files) {
   const healBranch = `auto-heal/attempt-${attempt}-${Date.now()}`;
 
   try {
-    execSync(`git checkout -b ${healBranch}`, { cwd: repoRoot, stdio: 'pipe' });
-    execSync(`git push origin ${healBranch}`, { cwd: repoRoot, stdio: 'pipe' });
+    execFileSync('git', ['checkout', '-b', healBranch], { cwd: repoRoot, stdio: 'pipe' });
+    execFileSync('git', ['push', 'origin', healBranch], { cwd: repoRoot, stdio: 'pipe' });
 
     const prTitle = `Auto-heal: fix ${context.diagnosisType || 'ci-failure'} (attempt ${attempt})`;
     const prBody = [
@@ -144,8 +143,9 @@ function createPR(repoRoot, context, commitMsg, files) {
       '*Created automatically by the self-healing CI pipeline.*',
     ].join('\n');
 
-    const result = execSync(
-      `gh pr create --base "${context.branch || 'main'}" --head "${healBranch}" --title "${prTitle}" --body "${prBody}"`,
+    const result = execFileSync(
+      'gh',
+      ['pr', 'create', '--base', context.branch || 'main', '--head', healBranch, '--title', prTitle, '--body', prBody],
       {
         cwd: repoRoot,
         encoding: 'utf8',
@@ -169,7 +169,7 @@ function createPR(repoRoot, context, commitMsg, files) {
  */
 function getCurrentBranch(repoRoot) {
   try {
-    return execSync('git symbolic-ref --short HEAD', { cwd: repoRoot, encoding: 'utf8' }).trim();
+    return execFileSync('git', ['symbolic-ref', '--short', 'HEAD'], { cwd: repoRoot, encoding: 'utf8' }).trim();
   } catch {
     return 'main';
   }

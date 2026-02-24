@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const yaml = require('js-yaml');
 
 const CONFIG_FILENAME = '.heal-agent.yml';
 
@@ -30,68 +31,15 @@ const DEFAULTS = {
 };
 
 /**
- * Parse a simple YAML subset (key: value, nested objects, arrays with - prefix).
- * Avoids requiring a YAML library dependency.
+ * Parse YAML configuration file content.
  */
-function parseSimpleYaml(text) {
-  const result = {};
-  const lines = text.split('\n');
-  const stack = [{ indent: -1, obj: result }];
-
-  for (const raw of lines) {
-    const trimmed = raw.replace(/\r$/, '');
-    if (!trimmed.trim() || trimmed.trim().startsWith('#')) continue;
-
-    const indent = trimmed.search(/\S/);
-    const content = trimmed.trim();
-
-    // Pop stack to find parent
-    while (stack.length > 1 && stack[stack.length - 1].indent >= indent) {
-      stack.pop();
-    }
-    const parent = stack[stack.length - 1].obj;
-
-    // Array item
-    if (content.startsWith('- ')) {
-      const val = content.slice(2).trim().replace(/^['"]|['"]$/g, '');
-      if (!Array.isArray(parent)) {
-        // Find the key that should hold this array
-        const keys = Object.keys(parent);
-        const lastKey = keys[keys.length - 1];
-        if (lastKey && parent[lastKey] === null) {
-          parent[lastKey] = [val];
-          stack.push({ indent, obj: parent[lastKey] });
-        }
-      } else {
-        parent.push(val);
-      }
-      continue;
-    }
-
-    // Key: value
-    const colonIdx = content.indexOf(':');
-    if (colonIdx === -1) continue;
-
-    const key = content.slice(0, colonIdx).trim();
-    const valStr = content.slice(colonIdx + 1).trim();
-
-    if (valStr === '' || valStr === '|') {
-      // Nested object or upcoming array
-      parent[key] = null;
-      const nested = {};
-      parent[key] = nested;
-      stack.push({ indent, obj: nested });
-    } else {
-      // Scalar value
-      let val = valStr.replace(/^['"]|['"]$/g, '');
-      if (val === 'true') val = true;
-      else if (val === 'false') val = false;
-      else if (/^\d+$/.test(val)) val = parseInt(val, 10);
-      parent[key] = val;
-    }
+function parseConfigYaml(text) {
+  try {
+    return yaml.load(text) || {};
+  } catch (err) {
+    console.error(`[config] Failed to parse .heal-agent.yml: ${err.message}`);
+    return {};
   }
-
-  return result;
 }
 
 /**
@@ -141,8 +89,8 @@ function loadConfig(repoRoot) {
   }
 
   const content = fs.readFileSync(configPath, 'utf8');
-  const raw = parseSimpleYaml(content);
+  const raw = parseConfigYaml(content);
   return normalizeConfig(raw);
 }
 
-module.exports = { loadConfig, DEFAULTS, parseSimpleYaml, normalizeConfig };
+module.exports = { loadConfig, DEFAULTS, parseConfigYaml, normalizeConfig };

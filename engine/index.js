@@ -27,6 +27,7 @@ const { loadConfig } = require('./config');
 const { diagnose } = require('./diagnose');
 const { fix } = require('./fix');
 const { commit } = require('./commit');
+const { validate } = require('./validate');
 
 /**
  * Parse CLI arguments into an options object.
@@ -245,6 +246,22 @@ async function main() {
   if (!fixResult.success) {
     console.error(`[heal-agent] Fix was not successful: ${fixResult.reason || fixResult.error || 'unknown'}`);
     process.exit(1);
+  }
+
+  // Step 2.5: Validate the fix
+  if (config.backend !== 'copilot-agent') {
+    console.log('[heal-agent] Step 2.5: Validating fix...');
+    const validationResult = await validate({ repoRoot, diagnosis, config });
+
+    if (!validationResult.passed) {
+      console.error(`[heal-agent] Validation failed: ${validationResult.failedStep || 'unknown'}`);
+      if (opts.verbose) {
+        console.log(validationResult.output);
+      }
+      process.exit(1);
+    }
+
+    console.log('[heal-agent] Validation passed.');
   }
 
   // Step 3: Commit (for backends that modify files directly)
