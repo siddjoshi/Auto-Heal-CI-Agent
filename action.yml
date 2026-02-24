@@ -109,9 +109,14 @@ runs:
         HEAL_COPILOT_CLI_MODEL: ${{ inputs.copilot-cli-model }}
         HEAL_LLM_MODEL: ${{ inputs.llm-model }}
         HEAL_ACTION_PATH: ${{ github.action_path }}
-        COPILOT_GITHUB_TOKEN: ${{ inputs.copilot-token || env.GH_TOKEN || env.GITHUB_TOKEN }}
         GH_HOST: ${{ inputs.gh-host }}
       run: |
+        # Propagate copilot token: prefer explicit input, then inherit from caller env
+        if [ -n "${{ inputs.copilot-token }}" ]; then
+          export COPILOT_GITHUB_TOKEN="${{ inputs.copilot-token }}"
+          export GH_TOKEN="${{ inputs.copilot-token }}"
+          export GITHUB_TOKEN="${{ inputs.copilot-token }}"
+        fi
         ENGINE="${{ github.action_path }}/engine/index.js"
 
         ARGS="--repo-root $GITHUB_WORKSPACE"
