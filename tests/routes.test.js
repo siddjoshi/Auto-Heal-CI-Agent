@@ -122,7 +122,7 @@ describe('Task Routes', () => {
   describe('Auto-heal demo: wrong assertion', () => {
     test('should verify health endpoint returns correct status', async () => {
       const res = await request(app).get('/health');
-      expect(res.body.status).toBe('healthy');  // BUG: should be 'ok'
+      expect(res.body.status).toBe('ok');
     });
   });
 
