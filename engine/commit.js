@@ -110,6 +110,12 @@ function commit({ repoRoot, config, context, mode = 'push' }) {
   // Direct push
   try {
     const branch = context.branch || getCurrentBranch(repoRoot);
+    // Configure git credentials for push using PAT token
+    const token = context.ghPat || process.env.GH_PAT || process.env.GH_TOKEN || process.env.GITHUB_TOKEN;
+    if (token) {
+      const basicAuth = Buffer.from(`x-access-token:${token}`).toString('base64');
+      execFileSync('git', ['config', '--local', 'http.https://github.com/.extraheader', `AUTHORIZATION: basic ${basicAuth}`], { cwd: repoRoot, stdio: 'pipe' });
+    }
     execFileSync('git', ['push', 'origin', branch], { cwd: repoRoot, stdio: 'pipe' });
     return { success: true, mode: 'push', files: allowed, branch };
   } catch (err) {
@@ -137,7 +143,13 @@ function createPR(repoRoot, context, commitMsg, files) {
   try {
     execFileSync('git', ['checkout', '-b', healBranch], { cwd: repoRoot, stdio: 'pipe' });
 
-    execFileSync('git', ['push', 'origin', healBranch], { cwd: repoRoot, stdio: 'pipe' });
+    // Configure git credentials for push using PAT token
+    if (token) {
+      const basicAuth = Buffer.from(`x-access-token:${token}`).toString('base64');
+      execFileSync('git', ['config', '--local', 'http.https://github.com/.extraheader', `AUTHORIZATION: basic ${basicAuth}`], { cwd: repoRoot, stdio: 'pipe' });
+    }
+
+    execFileSync('git', ['push', 'origin', healBranch], { cwd: repoRoot, stdio: 'pipe', env: gitEnv });
 
     const prTitle = `Auto-heal: fix ${context.diagnosisType || 'ci-failure'} (attempt ${attempt})`;
     const prBody = [
