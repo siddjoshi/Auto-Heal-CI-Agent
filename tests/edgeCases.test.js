@@ -88,7 +88,7 @@ describe('Edge Cases', () => {
       taskService.createTask({ title: 'Done 1' });
       taskService.updateTask(1, { status: 'completed' });
       const stats = taskService.getStats();
-      expect(stats.byStatus.completed).toBe(2);  // BUG: should be 1
+      expect(stats.byStatus.completed).toBe(1);  // fixed: only 1 task completed
     });
   });
 });
