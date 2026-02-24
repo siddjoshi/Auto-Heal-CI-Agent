@@ -125,12 +125,12 @@ function createPR(repoRoot, context, commitMsg, files) {
   const healBranch = `auto-heal/attempt-${attempt}-${Date.now()}`;
 
   // Token strategy:
-  //   git push  → uses the Fine-Grained PAT (via actions/checkout extraheader)
+  //   git push    → relies on actions/checkout extraheader (GITHUB_TOKEN)
   //   gh pr create → uses GITHUB_TOKEN (Actions-provided, has pull-requests:write)
-  const pushToken = process.env.GH_TOKEN || process.env.COPILOT_GITHUB_TOKEN || process.env.GH_PAT || context.ghPat;
-  const prToken = process.env.GITHUB_TOKEN || pushToken;
+  //   Copilot CLI  → uses Fine-Grained PAT (GH_TOKEN / COPILOT_GITHUB_TOKEN)
+  const prToken = process.env.GITHUB_TOKEN || process.env.GH_TOKEN || process.env.GH_PAT || context.ghPat;
 
-  // Build env for gh pr create — override GH_TOKEN with GITHUB_TOKEN
+  // Build env for gh pr create — use GITHUB_TOKEN
   const prEnv = {
     ...process.env,
     ...(prToken ? { GH_TOKEN: prToken } : {}),
@@ -140,13 +140,7 @@ function createPR(repoRoot, context, commitMsg, files) {
   try {
     execFileSync('git', ['checkout', '-b', healBranch], { cwd: repoRoot, stdio: 'pipe' });
 
-    // Configure git credentials for push using PAT
-    if (pushToken) {
-      const basicAuth = Buffer.from(`x-access-token:${pushToken}`).toString('base64');
-      execFileSync('git', ['config', '--local', '--replace-all', 'http.https://github.com/.extraheader', `AUTHORIZATION: basic ${basicAuth}`], { cwd: repoRoot, stdio: 'pipe' });
-    }
-
-    console.log(`[commit] Push token: ${pushToken ? pushToken.substring(0, 8) + '...' : 'unset (using checkout credentials)'}`);
+    console.log(`[commit] Push via actions/checkout credentials`);
     console.log(`[commit] PR token: ${prToken ? prToken.substring(0, 8) + '...' : 'unset'}`);
 
     execFileSync('git', ['push', 'origin', healBranch], { cwd: repoRoot, stdio: 'pipe' });
