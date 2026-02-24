@@ -145,9 +145,20 @@ function createPR(repoRoot, context, commitMsg, files) {
 
     // Configure git credentials for push using PAT token
     if (token) {
+      console.log(`[commit] Setting git credentials with token (${token.substring(0, 8)}...)`);
       const basicAuth = Buffer.from(`x-access-token:${token}`).toString('base64');
-      execFileSync('git', ['config', '--local', 'http.https://github.com/.extraheader', `AUTHORIZATION: basic ${basicAuth}`], { cwd: repoRoot, stdio: 'pipe' });
+      execFileSync('git', ['config', '--local', '--replace-all', 'http.https://github.com/.extraheader', `AUTHORIZATION: basic ${basicAuth}`], { cwd: repoRoot, stdio: 'pipe' });
+    } else {
+      console.log('[commit] No token found — relying on existing git credentials');
     }
+
+    // Debug: show remote URL and current extraheader status
+    try {
+      const remoteUrl = execFileSync('git', ['remote', 'get-url', 'origin'], { cwd: repoRoot, encoding: 'utf8' }).trim();
+      console.log(`[commit] Remote URL: ${remoteUrl}`);
+      const headerCheck = execFileSync('git', ['config', '--local', '--get', 'http.https://github.com/.extraheader'], { cwd: repoRoot, encoding: 'utf8' }).trim();
+      console.log(`[commit] http.extraheader is set: ${headerCheck ? 'yes' : 'no'} (length=${headerCheck.length})`);
+    } catch { /* ignore */ }
 
     execFileSync('git', ['push', 'origin', healBranch], { cwd: repoRoot, stdio: 'pipe', env: gitEnv });
 
