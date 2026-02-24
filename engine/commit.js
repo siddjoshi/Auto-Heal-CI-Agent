@@ -124,28 +124,24 @@ function createPR(repoRoot, context, commitMsg, files) {
   const attempt = context.attempt || 1;
   const healBranch = `auto-heal/attempt-${attempt}-${Date.now()}`;
 
-  // Use GITHUB_TOKEN for push and PR operations (has contents:write).
-  // Fall back through other token env vars if GITHUB_TOKEN is not set.
-  const token = process.env.GITHUB_TOKEN || process.env.GH_TOKEN || process.env.GH_PAT || context.ghPat;
+  // For gh pr create, prefer a PAT (GH_TOKEN / COPILOT_GITHUB_TOKEN / GH_PAT)
+  // since enterprise policies may block GITHUB_TOKEN from creating PRs.
+  // For git push, rely on actions/checkout extraheader (GITHUB_TOKEN-based).
+  const prToken = process.env.GH_TOKEN || process.env.COPILOT_GITHUB_TOKEN || process.env.GH_PAT || context.ghPat || process.env.GITHUB_TOKEN;
 
   // Build env with token for gh CLI operations
   const gitEnv = {
     ...process.env,
-    ...(token ? { GH_TOKEN: token } : {}),
+    ...(prToken ? { GH_TOKEN: prToken } : {}),
     ...(context.ghHost ? { GH_HOST: context.ghHost } : {}),
   };
 
   try {
     execFileSync('git', ['checkout', '-b', healBranch], { cwd: repoRoot, stdio: 'pipe' });
 
-    // Debug: log which token is being used for push
-    console.log(`[commit] Push token source: GITHUB_TOKEN=${process.env.GITHUB_TOKEN ? 'set(' + process.env.GITHUB_TOKEN.substring(0, 8) + '...)' : 'unset'}, GH_TOKEN=${process.env.GH_TOKEN ? 'set(' + process.env.GH_TOKEN.substring(0, 8) + '...)' : 'unset'}`);
-
-    // Rely on actions/checkout extraheader for push (do NOT overwrite it)
-    try {
-      const remoteUrl = execFileSync('git', ['remote', 'get-url', 'origin'], { cwd: repoRoot, encoding: 'utf8' }).trim();
-      console.log(`[commit] Remote URL: ${remoteUrl}`);
-    } catch { /* ignore */ }
+    // Debug: log token sources
+    console.log(`[commit] Push via actions/checkout credentials (GITHUB_TOKEN=${process.env.GITHUB_TOKEN ? 'set(' + process.env.GITHUB_TOKEN.substring(0, 8) + '...)' : 'unset'})`);
+    console.log(`[commit] PR creation via GH_TOKEN=${prToken ? prToken.substring(0, 8) + '...' : 'unset'}`);
 
     execFileSync('git', ['push', 'origin', healBranch], { cwd: repoRoot, stdio: 'pipe' });
 
