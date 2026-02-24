@@ -110,17 +110,6 @@ function commit({ repoRoot, config, context, mode = 'push' }) {
   // Direct push
   try {
     const branch = context.branch || getCurrentBranch(repoRoot);
-    const token = context.ghPat || process.env.GH_PAT || process.env.GH_TOKEN || process.env.GITHUB_TOKEN;
-    if (token) {
-      const host = context.ghHost || 'github.com';
-      const authHeader = `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${token}`).toString('base64')}`;
-      try {
-        execFileSync('git', ['config', '--local', `http.https://${host}/.extraheader`, authHeader], {
-          cwd: repoRoot,
-          stdio: 'pipe',
-        });
-      } catch { /* non-fatal */ }
-    }
     execFileSync('git', ['push', 'origin', branch], { cwd: repoRoot, stdio: 'pipe' });
     return { success: true, mode: 'push', files: allowed, branch };
   } catch (err) {
@@ -147,19 +136,6 @@ function createPR(repoRoot, context, commitMsg, files) {
 
   try {
     execFileSync('git', ['checkout', '-b', healBranch], { cwd: repoRoot, stdio: 'pipe' });
-
-    // Configure git to use the token for push if available
-    if (token) {
-      const remoteUrl = getRemoteUrl(repoRoot);
-      if (remoteUrl && remoteUrl.includes('github')) {
-        const host = context.ghHost || 'github.com';
-        const authHeader = `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${token}`).toString('base64')}`;
-        execFileSync('git', ['config', '--local', `http.https://${host}/.extraheader`, authHeader], {
-          cwd: repoRoot,
-          stdio: 'pipe',
-        });
-      }
-    }
 
     execFileSync('git', ['push', 'origin', healBranch], { cwd: repoRoot, stdio: 'pipe' });
 
