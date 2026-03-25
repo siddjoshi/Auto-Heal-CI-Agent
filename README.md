@@ -1,26 +1,52 @@
 # Auto-Heal CI Agent
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Node.js Version](https://img.shields.io/badge/node-%3E%3D20-brightgreen)](package.json)
+[![CI Status](https://github.com/sidlabs-platform/Auto-Heal-CI-Agent/workflows/CI%20Pipeline/badge.svg)](https://github.com/sidlabs-platform/Auto-Heal-CI-Agent/actions)
+
+> **Automatically diagnose and fix CI/CD pipeline failures using AI — No manual intervention required.**
+
 A **platform-agnostic, self-healing CI/CD agent** that automatically diagnoses and fixes pipeline failures using AI. Supports **GitHub Copilot coding agent**, **Copilot CLI (via GitHub Models API)**, and **direct LLM API calls** (OpenAI, Anthropic, Azure OpenAI, GitHub Models).
 
-Works with **GitHub Actions, Azure DevOps, GitLab CI**, and any CI platform via the generic shell adapter.
+### Why Auto-Heal CI Agent?
+
+- **Zero Downtime**: Automatically fixes common CI failures (lint errors, test failures, build issues) in seconds
+- **Platform Agnostic**: Works with GitHub Actions, Azure DevOps, GitLab CI, or any CI platform
+- **Multiple AI Backends**: Choose between Copilot Agent, Copilot CLI, or direct LLM API calls
+- **Safe & Controlled**: Built-in safety mechanisms, file sandboxing, and kill switches
+- **Production Ready**: Includes audit trails, max retry limits, and fallback to human review
 
 ---
 
 ## How It Works
 
+```mermaid
+graph TD
+    A[Push to Repository] --> B[CI Pipeline Runs]
+    B --> C{Build & Test}
+    C -->|Success| D[✅ Deploy]
+    C -->|Failure| E[Auto-Heal Agent Triggered]
+    E --> F[Download CI Logs]
+    F --> G[Classify Failure Type]
+    G --> H[AI Backend Generates Fix]
+    H --> I[Apply & Validate Fix]
+    I --> J{Fix Valid?}
+    J -->|Yes| K[Commit & Push/PR]
+    K --> L[CI Re-runs]
+    L --> M{Attempt < Max?}
+    M -->|Yes| C
+    M -->|No| N[Create GitHub Issue]
+    J -->|No| M
 ```
-push → CI runs (lint, test, build)
-          ↓ failure
-      Handler chain classifies failure type
-          ↓
-      AI backend diagnoses & generates fix
-          ↓
-      Validate fix → commit & push (or open PR)
-          ↓
-      CI re-runs automatically
-          ↓ (up to N attempts)
-      Fallback: create GitHub Issue
-```
+
+**The healing process in 4 steps:**
+
+1. **Detect**: CI pipeline fails → logs are uploaded as artifacts
+2. **Diagnose**: Handler chain classifies the failure (lint/test/build/dependency)
+3. **Fix**: AI backend (Copilot/LLM) generates and applies a fix
+4. **Verify**: Changes are committed, CI re-runs automatically (up to 3 attempts)
+
+If healing fails after max attempts, a GitHub Issue is created for manual review.
 
 ### Architecture Overview
 
@@ -41,9 +67,9 @@ push → CI runs (lint, test, build)
 
 ## Quick Start
 
-### Use as a GitHub Action in Your Repository
+### 1. Use as a GitHub Action (Recommended)
 
-The simplest way to add self-healing to your CI is the composite GitHub Action:
+The simplest way to add self-healing to your CI is via the composite GitHub Action. Add this to your workflow:
 
 ```yaml
 # .github/workflows/ci.yml
@@ -110,6 +136,36 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
 ```
+
+### 2. Quick Setup Checklist
+
+- [ ] Add the workflow above to `.github/workflows/ci.yml`
+- [ ] Create a GitHub Personal Access Token (PAT) with `repo` scope
+- [ ] Add the PAT as a repository secret named `GH_PAT`
+- [ ] (Optional) Create `.heal-agent.yml` in your repo root to customize behavior
+- [ ] Push a commit and watch the auto-healing in action!
+
+### 3. Try it with the Demo App
+
+This repository includes a sample Express app with intentional bugs to demonstrate the healing process:
+
+```bash
+# Clone the repository
+git clone https://github.com/sidlabs-platform/Auto-Heal-CI-Agent.git
+cd Auto-Heal-CI-Agent
+
+# Install dependencies
+npm install
+
+# Run the tests (will fail due to deliberate bugs)
+npm test
+
+# Run the heal agent to fix the issues
+npm run heal:diagnose  # Diagnose only (dry run)
+npm run heal           # Diagnose and fix
+```
+
+---
 
 ### Action Inputs
 
@@ -382,6 +438,139 @@ npm run build       # Validate syntax (build check)
 npm run test:json   # Tests with JSON output (for handlers)
 npm run lint:json   # ESLint with JSON output (for handlers)
 ```
+
+---
+
+## Troubleshooting
+
+### Common Issues
+
+#### Agent Not Triggering
+
+**Problem**: Auto-heal job doesn't run after CI failure
+
+**Solutions**:
+- Verify `ENABLE_SELF_HEAL` repository variable is not set to `false`
+- Check that the `auto-heal` job has proper permissions (contents: write, pull-requests: write, issues: write)
+- Ensure the `needs: build-and-test` dependency is correct
+- Verify `if: failure()` condition is present
+
+#### Authentication Failures
+
+**Problem**: "Authentication failed" or "403 Forbidden" errors
+
+**Solutions**:
+- For `copilot-agent` or `copilot-cli`: Verify `GH_PAT` secret exists and has `repo` scope
+- For `llm-api`: Check that the appropriate API key environment variable is set (e.g., `OPENAI_API_KEY`)
+- Ensure the PAT hasn't expired
+- For GHES: Set `gh-host` input parameter to your GHES hostname
+
+#### Fixes Not Being Applied
+
+**Problem**: Agent diagnoses the issue but doesn't apply fixes
+
+**Solutions**:
+- Check `commit-mode` is set to `push` or `pr` (not `none`)
+- Verify protected files aren't blocking the fix (check `.heal-agent.yml` `paths.protected`)
+- Review `.heal-audit/` logs for detailed error messages
+- Ensure the backend has sufficient context to generate a valid fix
+
+#### Infinite Healing Loops
+
+**Problem**: Agent keeps trying to fix the same issue
+
+**Solutions**:
+- Check `max-attempts` is set appropriately (default: 3)
+- Review the fix logic in `.heal-audit/` to identify why fixes aren't working
+- Consider adding the problematic path to `paths.protected` temporarily
+- Use `dry-run: true` to diagnose without applying changes
+
+---
+
+## FAQ
+
+### General Questions
+
+**Q: Is this production-ready?**
+
+A: Yes, with proper configuration. Use `max-attempts: 3`, enable `paths.protected`, and start with `commit-mode: pr` for review before auto-merging.
+
+**Q: Which AI backend should I use?**
+
+A:
+- **copilot-agent**: Best for GitHub repos, creates Issues + PRs via Copilot
+- **copilot-cli**: Direct file edits using GitHub Models API with project context
+- **llm-api**: Most flexible, works with any LLM provider and CI platform
+
+**Q: Does this work with private repositories?**
+
+A: Yes, it works with both public and private repositories. Ensure your PAT has access to the private repo.
+
+**Q: What languages are supported?**
+
+A: Currently optimized for Node.js. Python, Go, and .NET support is planned. The generic shell adapter works with any language.
+
+### Security & Safety
+
+**Q: Is it safe to let AI modify my code?**
+
+A: The agent includes multiple safety mechanisms:
+- File sandboxing (only modifies allowed paths)
+- Protected file list (never modifies critical files)
+- Max retry limits
+- Audit trail for every change
+- Kill switch via `ENABLE_SELF_HEAL` variable
+- Start with `commit-mode: pr` for manual review
+
+**Q: Can I disable auto-healing temporarily?**
+
+A: Yes, set the `ENABLE_SELF_HEAL` repository variable to `false`. This acts as a kill switch without modifying your workflow files.
+
+**Q: What happens if the agent makes a bad fix?**
+
+A:
+1. The CI will fail again on the next attempt
+2. After `max-attempts` (default: 3), the agent stops and creates a GitHub Issue for manual review
+3. All changes are logged in `.heal-audit/` for debugging
+
+### Cost & Usage
+
+**Q: How much does this cost?**
+
+A: Costs depend on the backend:
+- **copilot-agent**: Included with GitHub Copilot subscription
+- **copilot-cli**: Uses GitHub Models API (pricing varies by model)
+- **llm-api**: Direct API costs from your LLM provider
+
+**Q: How can I reduce API costs?**
+
+A:
+- Set reasonable `max-attempts` (3 is recommended)
+- Use smaller models for simple fixes (e.g., GPT-4o-mini)
+- Enable the kill switch during development/testing
+- Use `dry-run: true` for testing without applying fixes
+
+### Integration
+
+**Q: Can I use this with Azure DevOps / GitLab CI?**
+
+A: Yes! Use the generic shell adapter (`adapters/generic/heal.sh`) or platform-specific templates in `adapters/`.
+
+**Q: Can I customize the healing logic?**
+
+A: Yes, see [EXTENDING.md](EXTENDING.md) for:
+- Adding new failure handlers
+- Creating custom backends
+- Modifying prompt templates
+- Adding language support
+
+**Q: How do I test this before using in production?**
+
+A:
+1. Clone this repo and run the demo app (`npm test`, then `npm run heal`)
+2. Use `dry-run: true` to diagnose without applying fixes
+3. Start with `commit-mode: pr` to manually review all changes
+4. Test on a non-critical branch or repository first
 
 ---
 
