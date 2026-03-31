@@ -90,6 +90,12 @@ describe('TaskService', () => {
       const result = taskService.createTask({ title: '  Trimmed  ' });
       expect(result.task.title).toBe('Trimmed');
     });
+
+    test('should ignore unexpected fields on create', () => {
+      const result = taskService.createTask({ title: 'New task', unexpected: 'value' });
+      expect(result.task.title).toBe('New task');
+      expect(result.task.unexpected).toBeUndefined();
+    });
   });
 
   describe('getTask', () => {
