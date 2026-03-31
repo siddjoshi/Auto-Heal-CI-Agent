@@ -50,6 +50,12 @@ describe('TaskService', () => {
       const result = taskService.validateTaskInput({ priority: 'high' }, true);
       expect(result.valid).toBe(true);
     });
+
+    test('should reject non-object task data', () => {
+      const result = taskService.validateTaskInput(null);
+      expect(result.valid).toBe(false);
+      expect(result.errors[0]).toContain('JSON object');
+    });
   });
 
   describe('createTask', () => {
@@ -130,6 +136,13 @@ describe('TaskService', () => {
       taskService.createTask({ title: 'Second' });
       const result = taskService.updateTask(2, { title: 'First' });
       expect(result.error).toContain('already exists');
+    });
+
+    test('should ignore unexpected fields on update', () => {
+      taskService.createTask({ title: 'Original' });
+      const result = taskService.updateTask(1, { title: 'Updated', unexpected: 'value' });
+      expect(result.task.title).toBe('Updated');
+      expect(result.task.unexpected).toBeUndefined();
     });
   });
 

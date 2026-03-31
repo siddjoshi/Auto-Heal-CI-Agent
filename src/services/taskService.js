@@ -2,12 +2,33 @@ const store = require('../models/taskStore');
 
 const VALID_PRIORITIES = ['low', 'medium', 'high', 'critical'];
 const VALID_STATUSES = ['pending', 'in-progress', 'completed', 'cancelled'];
+const ALLOWED_TASK_FIELDS = ['title', 'description', 'priority', 'status'];
+
+function isPlainObject(value) {
+  return value !== null && !Array.isArray(value) && Object.prototype.toString.call(value) === '[object Object]';
+}
+
+function sanitizeTaskData(data) {
+  const sanitized = {};
+
+  for (const field of ALLOWED_TASK_FIELDS) {
+    if (Object.prototype.hasOwnProperty.call(data, field)) {
+      sanitized[field] = data[field];
+    }
+  }
+
+  return sanitized;
+}
 
 /**
  * Validate task input data. Returns { valid, errors }.
  */
 function validateTaskInput(data, isUpdate = false) {
   const errors = [];
+
+  if (!isPlainObject(data)) {
+    return { valid: false, errors: ['Task data must be a JSON object'] };
+  }
 
   if (!isUpdate && (!data.title || typeof data.title !== 'string' || data.title.trim().length === 0)) {
     errors.push('Title is required and must be a non-empty string');
@@ -63,17 +84,19 @@ function createTask(data) {
     return { error: validation.errors.join('; ') };
   }
 
+  const taskData = sanitizeTaskData(data);
+
   // Check for duplicate title
-  const existing = store.findByTitle(data.title.trim());
+  const existing = store.findByTitle(taskData.title.trim());
   if (existing) {
     return { error: 'A task with this title already exists' };
   }
 
   const task = store.createTask({
-    title: data.title.trim(),
-    description: data.description ? data.description.trim() : '',
-    priority: data.priority || 'medium',
-    status: data.status || 'pending'
+    title: taskData.title.trim(),
+    description: taskData.description ? taskData.description.trim() : '',
+    priority: taskData.priority || 'medium',
+    status: taskData.status || 'pending'
   });
 
   return { task };
@@ -93,16 +116,18 @@ function updateTask(id, data) {
     return { error: validation.errors.join('; ') };
   }
 
+  const taskData = sanitizeTaskData(data);
+
   // If title is being changed, check for duplicates
-  if (data.title) {
-    const existing = store.findByTitle(data.title.trim());
+  if (taskData.title) {
+    const existing = store.findByTitle(taskData.title.trim());
     if (existing && existing.id !== numericId) {
       return { error: 'A task with this title already exists' };
     }
-    data.title = data.title.trim();
+    taskData.title = taskData.title.trim();
   }
 
-  const updated = store.updateTask(numericId, data);
+  const updated = store.updateTask(numericId, taskData);
   if (!updated) {
     return { error: 'Task not found' };
   }
